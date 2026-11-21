@@ -1,9 +1,18 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { ethers } from "ethers";
 import { CONTRACT_ADDRESSES, NETWORK_CONFIG } from "../contracts/addresses";
 import { ALOKA_ESCROW_ABI, MOCK_IDR_ABI } from "../contracts/abis";
+
+const SESSION_KEY = "aloka_wallet_connected";
+
+type NotifKind = "error" | "info" | "success";
+interface Notif {
+  id: number;
+  kind: NotifKind;
+  message: string;
+}
 
 interface Web3ContextType {
   account: string | null;
@@ -13,6 +22,7 @@ interface Web3ContextType {
   signer: ethers.JsonRpcSigner | null;
   escrowContract: ethers.Contract | null;
   mockIdrContract: ethers.Contract | null;
+  walletAvailable: boolean;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
   switchNetwork: () => Promise<void>;
@@ -25,8 +35,8 @@ interface Web3ContextType {
   nextApplicationId: number;
   refreshContractStats: () => Promise<void>;
   isLoading: boolean;
-  statusMessage: string | null;
-  error: string | null;
+  notif: Notif | null;
+  dismissNotif: () => void;
 }
 
 const Web3Context = createContext<Web3ContextType>({
@@ -37,6 +47,7 @@ const Web3Context = createContext<Web3ContextType>({
   signer: null,
   escrowContract: null,
   mockIdrContract: null,
+  walletAvailable: false,
   connectWallet: async () => {},
   disconnectWallet: () => {},
   switchNetwork: async () => {},
@@ -49,9 +60,44 @@ const Web3Context = createContext<Web3ContextType>({
   nextApplicationId: 1,
   refreshContractStats: async () => {},
   isLoading: false,
-  statusMessage: null,
-  error: null,
+  notif: null,
+  dismissNotif: () => {},
 });
+
+const notifSeq = { current: 0 };
+
+function translateError(err: any): string {
+  if (!err) return "Terjadi kesalahan yang tidak diketahui.";
+  const code = err?.code;
+  const msg: string = err?.message || err?.reason || String(err);
+
+  // EIP-1193 rejection
+  if (code === 4001 || code === "ACTION_REJECTED" || /user rejected/i.test(msg)) {
+    return "Permintaan ditolak di dompet. Klik tombol Hubungkan Wallet lagi untuk mencoba.";
+  }
+  if (code === -32002) {
+    return "Permintaan koneksi dompet sedang menunggu konfirmasi di MetaMask. Buka ekstensi MetaMask untuk menyetujui.";
+  }
+  if (code === 4902) {
+    return `Jaringan ${NETWORK_CONFIG.chainName} belum ditambahkan di MetaMask. Klik "Ganti ke Polygon Amoy" untuk menambahkannya.`;
+  }
+  if (/network changed/i.test(msg) || /chain changed/i.test(msg)) {
+    return "Jaringan dompet berubah. Mohon ulangi koneksi.";
+  }
+  if (/underlying network changed/i.test(msg)) {
+    return "Jaringan dompet berubah saat transaksi. Mohon ulangi koneksi.";
+  }
+  if (/insufficient funds/i.test(msg)) {
+    return "Saldo MATIC tidak cukup untuk biaya gas transaksi ini.";
+  }
+  if (/nonce/i.test(msg) && /too low/i.test(msg)) {
+    return "Nonce transaksi terlalu rendah. Coba lagi dalam beberapa detik.";
+  }
+  if (/call revert|execution reverted/i.test(msg)) {
+    return `Transaksi ditolak smart contract: ${msg.slice(0, 120)}`;
+  }
+  return msg.slice(0, 200);
+}
 
 export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [account, setAccount] = useState<string | null>(null);
@@ -66,12 +112,42 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
   const [totalDistributed, setTotalDistributed] = useState<bigint>(BigInt(0));
   const [nextApplicationId, setNextApplicationId] = useState<number>(1);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notif, setNotif] = useState<Notif | null>(null);
+  const [walletAvailable, setWalletAvailable] = useState<boolean>(false);
+
+  const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isCorrectNetwork = chainId === NETWORK_CONFIG.chainId;
 
-  // Initialize read-only or browser provider
+  const pushNotif = useCallback((kind: NotifKind, message: string, ttl: number = 7000) => {
+    notifSeq.current += 1;
+    const id = notifSeq.current;
+    setNotif({ id, kind, message });
+    if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
+    if (ttl > 0) {
+      notifTimerRef.current = setTimeout(() => {
+        setNotif((prev) => (prev?.id === id ? null : prev));
+      }, ttl);
+    }
+  }, []);
+
+  const dismissNotif = useCallback(() => {
+    if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
+    setNotif(null);
+  }, []);
+
+  const getInjectedProvider = useCallback((): any | null => {
+    if (typeof window === "undefined") return null;
+    const w = window as any;
+    const eth = w.ethereum;
+    if (!eth) return null;
+    if (eth.providers && Array.isArray(eth.providers) && eth.providers.length > 0) {
+      const mm = eth.providers.find((p: any) => p?.isMetaMask);
+      return mm || eth.providers[0];
+    }
+    return eth;
+  }, []);
+
   const initReadProvider = useCallback(() => {
     try {
       const rpcUrl = NETWORK_CONFIG.rpcUrls[0];
@@ -131,58 +207,22 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [provider, account, initReadProvider]);
 
-  // Handle wallet connection
-  const connectWallet = async () => {
-    if (typeof window === "undefined" || !(window as any).ethereum) {
-      setError("Ekstensi Web3 wallet (MetaMask) tidak terdeteksi. Silakan instal MetaMask.");
+  const switchNetwork = useCallback(async () => {
+    const eth = getInjectedProvider();
+    if (!eth) {
+      pushNotif("error", "Dompet Web3 tidak terdeteksi. Silakan pasang MetaMask terlebih dahulu.");
       return;
     }
-
     try {
-      setIsLoading(true);
-      setError(null);
-      const browserProvider = new ethers.BrowserProvider((window as any).ethereum);
-      const accounts = await browserProvider.send("eth_requestAccounts", []);
-      const network = await browserProvider.getNetwork();
-      const currentSigner = await browserProvider.getSigner();
-
-      const userAccount = accounts[0];
-      setAccount(userAccount);
-      setChainId(Number(network.chainId));
-      setProvider(browserProvider);
-      setSigner(currentSigner);
-
-      if (Number(network.chainId) !== NETWORK_CONFIG.chainId) {
-        await switchNetwork();
-      }
-    } catch (err: any) {
-      console.error("Connect error:", err);
-      setError(err?.message || "Gagal menghubungkan wallet");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const disconnectWallet = () => {
-    setAccount(null);
-    setSigner(null);
-    setIsOwner(false);
-    setIsValidator(false);
-    setUserMidrBalance(BigInt(0));
-  };
-
-  const switchNetwork = async () => {
-    if (typeof window === "undefined" || !(window as any).ethereum) return;
-    try {
-      await (window as any).ethereum.request({
+      await eth.request({
         method: "wallet_switchEthereumChain",
         params: [{ chainId: NETWORK_CONFIG.chainIdHex }],
       });
+      pushNotif("success", `Berhasil beralih ke ${NETWORK_CONFIG.chainName}.`, 4000);
     } catch (switchError: any) {
-      // Chain not added to metamask
-      if (switchError.code === 4902) {
+      if (switchError?.code === 4902) {
         try {
-          await (window as any).ethereum.request({
+          await eth.request({
             method: "wallet_addEthereumChain",
             params: [
               {
@@ -194,50 +234,146 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
               },
             ],
           });
-        } catch (addError) {
+          pushNotif("success", `Jaringan ${NETWORK_CONFIG.chainName} ditambahkan dan aktif.`, 4000);
+        } catch (addError: any) {
           console.error("Failed to add network", addError);
+          pushNotif("error", translateError(addError));
         }
+      } else if (switchError?.code === 4001) {
+        pushNotif("info", "Permintaan ganti jaringan dibatalkan.");
+      } else {
+        pushNotif("error", translateError(switchError));
       }
     }
-  };
+  }, [getInjectedProvider, pushNotif]);
 
-  // Listen to accounts and chain changed
+  const connectWallet = useCallback(async () => {
+    const eth = getInjectedProvider();
+    if (!eth) {
+      pushNotif(
+        "error",
+        "Dompet Web3 (MetaMask) tidak terdeteksi. Pasang ekstensi MetaMask dari metamask.io lalu muat ulang halaman."
+      );
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const browserProvider = new ethers.BrowserProvider(eth);
+      const accounts: string[] = await browserProvider.send("eth_requestAccounts", []);
+      const network = await browserProvider.getNetwork();
+      const currentSigner = await browserProvider.getSigner();
+
+      const userAccount = accounts[0];
+      setAccount(userAccount);
+      setChainId(Number(network.chainId));
+      setProvider(browserProvider);
+      setSigner(currentSigner);
+
+      try {
+        localStorage.setItem(SESSION_KEY, "1");
+      } catch {}
+
+      if (Number(network.chainId) !== NETWORK_CONFIG.chainId) {
+        pushNotif(
+          "info",
+          `Dompet terhubung ke jaringan lain (Chain ID ${Number(network.chainId)}). Klik "Ganti ke Polygon Amoy" untuk beralih.`
+        );
+        await switchNetwork();
+      } else {
+        pushNotif("success", `Dompet terhubung: ${userAccount.slice(0, 6)}...${userAccount.slice(-4)}`, 4000);
+      }
+    } catch (err: any) {
+      console.error("Connect error:", err);
+      pushNotif("error", translateError(err));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [getInjectedProvider, switchNetwork, pushNotif]);
+
+  const disconnectWallet = useCallback(() => {
+    setAccount(null);
+    setSigner(null);
+    setIsOwner(false);
+    setIsValidator(false);
+    setUserMidrBalance(BigInt(0));
+    try {
+      localStorage.removeItem(SESSION_KEY);
+    } catch {}
+    pushNotif("info", "Koneksi dompet diputus dari Aloka. MetaMask tetap aktif di browser.", 4000);
+  }, [pushNotif]);
+
+  // Initialize wallet detection + listeners + auto-reconnect
   useEffect(() => {
-    if (typeof window === "undefined" || !(window as any).ethereum) {
+    const eth = getInjectedProvider();
+    if (!eth) {
+      setWalletAvailable(false);
       const readProv = initReadProvider();
       if (readProv) setProvider(readProv);
       return;
     }
+    setWalletAvailable(true);
 
-    const ethereum = (window as any).ethereum;
+    const browserProvider = new ethers.BrowserProvider(eth);
 
     const handleAccountsChanged = (accounts: string[]) => {
       if (accounts.length > 0) {
-        setAccount(accounts[0]);
+        const newAcc = accounts[0];
+        setAccount(newAcc);
+        browserProvider
+          .getSigner()
+          .then((s) => setSigner(s))
+          .catch(() => setSigner(null));
+        pushNotif("info", `Akun dompet beralih ke ${newAcc.slice(0, 6)}...${newAcc.slice(-4)}`, 4000);
       } else {
-        disconnectWallet();
+        setAccount(null);
+        setSigner(null);
+        try {
+          localStorage.removeItem(SESSION_KEY);
+        } catch {}
+        pushNotif("info", "Dompet diputus dari browser.");
       }
     };
 
     const handleChainChanged = (hexChainId: string) => {
-      setChainId(parseInt(hexChainId, 16));
+      const cid = parseInt(hexChainId, 16);
+      setChainId(cid);
+      browserProvider
+        .getSigner()
+        .then((s) => setSigner(s))
+        .catch(() => setSigner(null));
+      if (cid !== NETWORK_CONFIG.chainId) {
+        pushNotif(
+          "info",
+          `Jaringan domlet berubah ke Chain ID ${cid}. Klik "Ganti ke Polygon Amoy" untuk kembali ke jaringan yang benar.`
+        );
+      } else {
+        pushNotif("success", `Menggunakan jaringan ${NETWORK_CONFIG.chainName}.`, 3000);
+      }
     };
 
-    ethereum.on("accountsChanged", handleAccountsChanged);
-    ethereum.on("chainChanged", handleChainChanged);
+    eth.on("accountsChanged", handleAccountsChanged);
+    eth.on("chainChanged", handleChainChanged);
 
-    // Initial check
-    const browserProvider = new ethers.BrowserProvider(ethereum);
+    // Try silent reconnect if user previously connected
+    const tryReconnect = localStorage.getItem(SESSION_KEY) === "1";
     browserProvider
       .send("eth_accounts", [])
-      .then(async (accounts) => {
+      .then(async (accounts: string[]) => {
         if (accounts.length > 0) {
           setAccount(accounts[0]);
           const net = await browserProvider.getNetwork();
           setChainId(Number(net.chainId));
           setProvider(browserProvider);
-          const s = await browserProvider.getSigner();
-          setSigner(s);
+          try {
+            const s = await browserProvider.getSigner();
+            setSigner(s);
+          } catch {
+            setSigner(null);
+          }
+        } else if (tryReconnect) {
+          // Session flag exists but MetaMask not authorized — keep flag for next click
+          setProvider(browserProvider);
         } else {
           setProvider(browserProvider);
         }
@@ -248,17 +384,26 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
     return () => {
-      ethereum.removeListener("accountsChanged", handleAccountsChanged);
-      ethereum.removeListener("chainChanged", handleChainChanged);
+      try {
+        eth.removeListener("accountsChanged", handleAccountsChanged);
+        eth.removeListener("chainChanged", handleChainChanged);
+      } catch {}
     };
-  }, [initReadProvider]);
+  }, [getInjectedProvider, initReadProvider, pushNotif]);
 
-  // Refresh stats on load or account change
+  // Refresh stats on account/provider change + interval
   useEffect(() => {
     refreshContractStats();
     const interval = setInterval(refreshContractStats, 15000);
     return () => clearInterval(interval);
   }, [refreshContractStats]);
+
+  // Cleanup notif timer on unmount
+  useEffect(() => {
+    return () => {
+      if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
+    };
+  }, []);
 
   const escrowContract = signer
     ? new ethers.Contract(CONTRACT_ADDRESSES.escrow, ALOKA_ESCROW_ABI, signer)
@@ -282,6 +427,7 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         signer,
         escrowContract,
         mockIdrContract,
+        walletAvailable,
         connectWallet,
         disconnectWallet,
         switchNetwork,
@@ -294,8 +440,8 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         nextApplicationId,
         refreshContractStats,
         isLoading,
-        statusMessage,
-        error,
+        notif,
+        dismissNotif,
       }}
     >
       {children}

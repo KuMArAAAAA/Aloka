@@ -29,3 +29,25 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Wallet toast entrance animation */
+@keyframes aloka-toast-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aloka-toast-enter {
+  animation: aloka-toast-in 220ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aloka-toast-enter {
+    animation: none;
+  }
+}

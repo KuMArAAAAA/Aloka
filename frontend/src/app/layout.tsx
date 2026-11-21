@@ -3,6 +3,7 @@ import "./globals.css";
 import { Web3Provider } from "@/context/Web3Context";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { WalletToast } from "@/components/WalletToast";
 
 export const metadata: Metadata = {
   title: "Aloka – Platform Distribusi Bantuan Pendidikan PIP Berbasis Web3",
@@ -22,6 +23,7 @@ export default function RootLayout({
           <Navbar />
           <main className="flex-1">{children}</main>
           <Footer />
+          <WalletToast />
         </Web3Provider>
       </body>
     </html>
