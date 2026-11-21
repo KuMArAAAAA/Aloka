@@ -1,10 +1,16 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useWeb3 } from "@/context/Web3Context";
 import { formatIDR, EscrowStatus, shortenAddress, mapOnchainStatus } from "@/lib/utils";
 import { INITIAL_STUDENTS, StudentRecord } from "@/lib/mockData";
-import { getOfficialToken, getOfficialSession } from "@/lib/session";
+import {
+  getOfficialToken,
+  getOfficialSession,
+  hasActiveStudentSession,
+  hasActiveOfficialSession,
+} from "@/lib/session";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   School,
@@ -21,15 +27,30 @@ import {
 } from "lucide-react";
 
 export default function SekolahDashboardPage() {
+  const router = useRouter();
   const {
     isValidator,
     escrowContract,
     refreshContractStats,
   } = useWeb3();
 
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [schoolInfo, setSchoolInfo] = useState<{ name: string; npsn?: string } | null>(null);
+
+  // Proteksi hak akses: Siswa DILARANG mengakses halaman verifikasi sekolah!
+  useEffect(() => {
+    if (hasActiveStudentSession()) {
+      router.replace("/siswa");
+      return;
+    }
+    if (!hasActiveOfficialSession()) {
+      router.replace("/login");
+      return;
+    }
+    setIsAuthorized(true);
+  }, [router]);
 
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -222,6 +243,17 @@ export default function SekolahDashboardPage() {
       setActionLoadingId(null);
     }
   };
+
+  if (!isAuthorized) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="flex items-center gap-2.5 text-slate-500 text-sm">
+          <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+          <span>Memeriksa wewenang verifikator...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">

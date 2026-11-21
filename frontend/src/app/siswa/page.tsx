@@ -26,16 +26,32 @@ import {
   ExternalLink,
   Lock,
   Loader2,
+  Download,
+  Copy,
+  Check,
+  AlertTriangle,
 } from "lucide-react";
 
 export default function SiswaPortalPage() {
   const {
     account,
     connectWallet,
+    disconnectWallet,
+    switchNetwork,
+    isCorrectNetwork,
+    walletAvailable,
+    isLoading: walletLoading,
     escrowContract,
     userMidrBalance,
     refreshContractStats,
   } = useWeb3();
+
+  const [copiedWallet, setCopiedWallet] = useState(false);
+  const handleCopyWallet = (addr: string) => {
+    navigator.clipboard.writeText(addr);
+    setCopiedWallet(true);
+    setTimeout(() => setCopiedWallet(false), 2000);
+  };
 
   // NISN Search State
   const [searchNisn, setSearchNisn] = useState("");
@@ -422,27 +438,96 @@ export default function SiswaPortalPage() {
             <span>{profileError}</span>
           </div>
         )}
+      </div>
 
-        {/* Saldo jika Wallet terhubung */}
-        {account && (
-          <div className="mt-6 pt-5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
-                <Wallet className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-500 uppercase tracking-wider">Saldo Bantuan di Dompet</p>
-                <p className="text-xl font-bold text-slate-900">
-                  {formatIDR(userMidrBalance)}{" "}
-                  <span className="text-sm font-semibold text-emerald-600">mIDR Rupiah</span>
-                </p>
-              </div>
+      {/* Kartu Koneksi Dompet Web3 Siswa di Dashboard */}
+      <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-xs">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div className="flex items-start gap-4">
+            <div className={`p-3 rounded-xl shrink-0 ${account ? "bg-emerald-50 text-emerald-600" : "bg-blue-50 text-blue-600"}`}>
+              <Wallet className="w-6 h-6" />
             </div>
-            <div className="text-xs text-slate-500 font-mono">
-              Alamat Penerima: {shortenAddress(account, 6)}
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-base font-bold text-slate-900">
+                  {account ? "Dompet Digital Siswa Terhubung" : "Koneksi Dompet Digital Siswa"}
+                </h3>
+                {account && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Polygon Amoy (80002)</span>
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 max-w-xl leading-relaxed">
+                {account
+                  ? "Dompet digital ini digunakan untuk menerima transfer langsung alokasi PIP dari Smart Contract Escrow."
+                  : "Sambungkan dompet MetaMask di jaringan Polygon Amoy untuk menerima pencairan dana bantuan PIP langsung tanpa perantara."}
+              </p>
+              {account && (
+                <div className="pt-2 flex flex-wrap items-center gap-3 text-xs font-mono">
+                  <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md text-slate-700">
+                    <span>{shortenAddress(account, 6)}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyWallet(account)}
+                      className="text-slate-400 hover:text-slate-600"
+                      title="Salin alamat dompet"
+                    >
+                      {copiedWallet ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <div className="bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-md font-semibold font-mono border border-emerald-200">
+                    Saldo mIDR: {formatIDR(userMidrBalance)}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        )}
+
+          <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full md:w-auto shrink-0">
+            {!account ? (
+              walletAvailable ? (
+                <button
+                  type="button"
+                  onClick={connectWallet}
+                  disabled={walletLoading}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors shadow-xs disabled:opacity-50"
+                >
+                  {walletLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wallet className="w-4 h-4" />}
+                  <span>{walletLoading ? "Menghubungkan..." : "Hubungkan Wallet"}</span>
+                </button>
+              ) : (
+                <a
+                  href="https://metamask.io/download/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm transition-colors shadow-xs"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Pasang MetaMask</span>
+                </a>
+              )
+            ) : !isCorrectNetwork ? (
+              <button
+                type="button"
+                onClick={switchNetwork}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium text-xs shadow-xs transition-colors"
+              >
+                <AlertTriangle className="w-4 h-4" />
+                <span>Ganti ke Polygon Amoy</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={disconnectWallet}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-medium transition-colors"
+              >
+                <span>Putuskan Dompet</span>
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Main Grid: Search Box & PIP Amount Reference */}
