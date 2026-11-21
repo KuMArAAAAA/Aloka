@@ -302,63 +302,101 @@ export const distributeAidOnChain = async (applicationId) => {
     throw error;
   }
 
-  // Jika onchainId null (misalnya aplikasi diverifikasi via alur manual/hybrid),
-  // lakukan registrasi on-chain via relayer atau fallback distribusi resmi
+  // Jika onchainId null, lakukan auto-register on-chain:
+  //   1) submitApplication — 1-arg variant (deployed contract support, beneficiary = gov signer)
+  //      Fallback ke 2-arg variant (untu deployment baru dengan overload) agar student wallet jadi beneficiary
+  //   2) verifyApplication via school signer
+  //   3) distributeAid via gov signer
+  //   4) Off-chain ERC20 transfer gov -> student wallet bila beneficiary on-chain != student wallet
+  // TIDAK ADA fake-hash fallback — error dilempar apa adanya supaya audit trail bersih.
   if (application.onchainId === null) {
     logger.info(`[Blockchain] onchainId is null for application ${applicationId}. Auto-registering on-chain...`);
+
+    let subReceipt;
+    let beneficiaryOnChain = govSigner.address;
+    let submitStrategyUsed;
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.gasPrice;
+
     try {
-      const targetBeneficiary = application.student?.walletAddress;
-      const subTx = targetBeneficiary
-        ? await escrow["submitApplication(bytes32,address)"](application.applicationHash, targetBeneficiary)
-        : await escrow["submitApplication(bytes32)"](application.applicationHash);
-      const subReceipt = await subTx.wait();
-      const event = parseEventFromReceipt(subReceipt, escrow, "ApplicationSubmitted");
-      if (event && event.args && event.args.applicationId !== undefined) {
-        application.onchainId = event.args.applicationId;
-        const schoolSigner = getSchoolSigner();
-        const schoolEscrow = getEscrowContractWithSigner(schoolSigner);
-        const verTx = await schoolEscrow.verifyApplication(application.onchainId, application.amount || 750000);
-        await verTx.wait();
-        await prisma.application.update({
-          where: { id: applicationId },
-          data: {
-            onchainId: application.onchainId,
-            txSubmitHash: subReceipt.hash,
-            txVerifyHash: verTx.hash,
-          },
-        });
+      // 1-arg variant — gov signer = beneficiary (works on currently deployed Polygon Amoy contract)
+      const subTx = await escrow["submitApplication(bytes32)"](application.applicationHash, {
+        gasLimit: 300_000, gasPrice,
+      });
+      subReceipt = await subTx.wait();
+      if (subReceipt.status !== 1) throw new Error(`submitApplication(bytes32) tx status ${subReceipt.status}`);
+      submitStrategyUsed = "1-arg (gov signer = beneficiary)";
+    } catch (err1) {
+      logger.warn(`[Blockchain] 1-arg submitApplication failed: ${err1.shortMessage || err1.message}. Trying 2-arg variant...`);
+      try {
+        const subTx2 = await escrow["submitApplication(bytes32,address)"](
+          application.applicationHash,
+          application.student.walletAddress,
+          { gasLimit: 300_000, gasPrice }
+        );
+        subReceipt = await subTx2.wait();
+        if (subReceipt.status !== 1) throw new Error(`submitApplication(bytes32,address) tx status ${subReceipt.status}`);
+        beneficiaryOnChain = application.student.walletAddress;
+        submitStrategyUsed = "2-arg (student wallet = beneficiary)";
+      } catch (err2) {
+        const error = new Error(`On-chain submitApplication failed (both 1-arg & 2-arg variants reverted). Last error: ${err2.shortMessage || err2.message}`);
+        error.statusCode = 502;
+        error.code = "ONCHAIN_SUBMIT_FAILED";
+        throw error;
       }
-    } catch (autoErr) {
-      logger.warn(`[Blockchain] Auto on-chain submission fallback: ${autoErr.message}`);
-      const fallbackTxHash = "0xc3" + Array.from({ length: 62 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-      await prisma.application.update({
-        where: { id: applicationId },
-        data: {
-          onchainStatus: "DISTRIBUTED",
-          txDistributeHash: fallbackTxHash,
-        },
-      });
-      await prisma.auditLog.create({
-        data: {
-          entityType: "Application",
-          entityId: applicationId,
-          action: "AID_DISTRIBUTED",
-          actorRole: "GOVERNMENT",
-          txHash: fallbackTxHash,
-          metadata: {
-            recipientWallet: application.student?.walletAddress,
-            amount: application.amount ? application.amount.toString() : "0",
-          },
-        },
-      });
-      return {
-        applicationId,
-        txHash: fallbackTxHash,
-        onchainStatus: "DISTRIBUTED",
-        recipientWallet: application.student?.walletAddress,
-        amount: application.amount ? application.amount.toString() : "0",
-      };
     }
+
+    const event = parseEventFromReceipt(subReceipt, escrow, "ApplicationSubmitted");
+    if (!event || !event.args || event.args.applicationId === undefined) {
+      const error = new Error("ApplicationSubmitted event not emitted from submit tx");
+      error.statusCode = 502;
+      error.code = "ONCHAIN_EVENT_MISSING";
+      throw error;
+    }
+    application.onchainId = event.args.applicationId;
+    logger.info(`[Blockchain] Submitted. onchainId=${application.onchainId.toString()} | strategy=${submitStrategyUsed} | beneficiary=${beneficiaryOnChain}`);
+
+    // Auto-verify via school signer
+    const schoolSigner = getSchoolSigner();
+    const schoolEscrow = getEscrowContractWithSigner(schoolSigner);
+    const verTx = await schoolEscrow.verifyApplication(
+      application.onchainId,
+      application.amount || 750000,
+      { gasLimit: 200_000, gasPrice: await provider.getFeeData().then(f => f.gasPrice) }
+    );
+    const verReceipt = await verTx.wait();
+    if (verReceipt.status !== 1) {
+      const error = new Error(`verifyApplication tx reverted (status ${verReceipt.status})`);
+      error.statusCode = 502;
+      error.code = "ONCHAIN_VERIFY_FAILED";
+      throw error;
+    }
+
+    application.onchainStatus = "VERIFIED";
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: {
+        onchainId: application.onchainId,
+        onchainStatus: "VERIFIED",
+        txSubmitHash: subReceipt.hash,
+        txVerifyHash: verReceipt.hash,
+      },
+    });
+    await prisma.auditLog.create({
+      data: {
+        entityType: "Application",
+        entityId: applicationId,
+        action: "ONCHAIN_SUBMIT_AND_VERIFY",
+        actorRole: "GOVERNMENT",
+        txHash: subReceipt.hash,
+        metadata: {
+          onchainId: application.onchainId.toString(),
+          verifyTxHash: verReceipt.hash,
+          beneficiaryOnChain,
+          submitStrategy: submitStrategyUsed,
+        },
+      },
+    });
   }
 
   if (application.onchainStatus !== "VERIFIED") {
@@ -375,22 +413,57 @@ export const distributeAidOnChain = async (applicationId) => {
     throw error;
   }
 
-  logger.info(`[Blockchain] Distributing aid for onchainId: ${application.onchainId} → ${application.student.walletAddress}...`);
+  logger.info(`[Blockchain] Distributing aid for onchainId: ${application.onchainId.toString()} → ${application.student.walletAddress}...`);
 
-  // Sinkronisasi beneficiary on-chain jika berbeda dengan wallet aktif siswa di DB
+  // Sync beneficiary on-chain jika berbeda dengan wallet aktif siswa di DB.
+  // Deployed contract saat ini TIDAK punya updateBeneficiary — call revert & di-catch.
+  // Akibatnya: beneficiary on-chain = gov signer (via 1-arg submit), dan di-post-distribute
+  // di-balance dengan off-chain ERC20 transfer gov -> student wallet (lihat bawah).
   try {
     const onchainApp = await escrow.applications(application.onchainId);
     if (onchainApp.beneficiary && onchainApp.beneficiary.toLowerCase() !== application.student.walletAddress.toLowerCase()) {
-      logger.info(`[Blockchain] Updating beneficiary on-chain from ${onchainApp.beneficiary} to ${application.student.walletAddress}...`);
+      logger.info(`[Blockchain] Attempting beneficiary sync: ${onchainApp.beneficiary} → ${application.student.walletAddress}...`);
       const updateTx = await escrow.updateBeneficiary(application.onchainId, application.student.walletAddress);
       await updateTx.wait();
     }
   } catch (syncErr) {
-    logger.warn(`[Blockchain] Could not sync beneficiary on-chain: ${syncErr.message}`);
+    logger.warn(`[Blockchain] Beneficiary sync skipped (deployed contract lacks updateBeneficiary): ${syncErr.shortMessage || syncErr.message}. Will off-chain transfer to student wallet post-distribute.`);
   }
 
-  const tx = await escrow.distributeAid(application.onchainId);
+  const feeData2 = await provider.getFeeData();
+  const tx = await escrow.distributeAid(application.onchainId, {
+    gasLimit: 300_000, gasPrice: feeData2.gasPrice,
+  });
   const receipt = await tx.wait();
+  if (receipt.status !== 1) {
+    const error = new Error(`distributeAid tx reverted (status ${receipt.status})`);
+    error.statusCode = 502;
+    error.code = "DISTRIBUTE_TX_REVERTED";
+    throw error;
+  }
+
+  // Bila beneficiary on-chain != student wallet (kasus 1-arg variant), lakukan
+  // off-chain ERC20 transfer mIDR dari gov signer (yang nerima distribute) -> student wallet,
+  // supaya siswa benar-benar menerima dana bantuan.
+  const onchainAppAfter = await escrow.applications(application.onchainId);
+  const distAmount = application.amount || 750000;
+  let transferTxHash = null;
+  if (onchainAppAfter.beneficiary.toLowerCase() !== application.student.walletAddress.toLowerCase()) {
+    logger.info(`[Blockchain] On-chain beneficiary is ${onchainAppAfter.beneficiary}. Off-chain transferring ${distAmount.toString()} mIDR → student wallet ${application.student.walletAddress}...`);
+    const token = getTokenContractWithSigner(govSigner);
+    const transferTx = await token.transfer(application.student.walletAddress, distAmount, {
+      gasLimit: 100_000, gasPrice: (await provider.getFeeData()).then(f => f.gasPrice),
+    });
+    const transferReceipt = await transferTx.wait();
+    if (transferReceipt.status !== 1) {
+      const error = new Error(`Off-chain transfer to student wallet reverted (status ${transferReceipt.status})`);
+      error.statusCode = 502;
+      error.code = "TRANSFER_TX_REVERTED";
+      throw error;
+    }
+    transferTxHash = transferReceipt.hash;
+    logger.info(`[Blockchain] Off-chain transfer complete. TxHash: ${transferTxHash}`);
+  }
 
   await prisma.application.update({
     where: { id: applicationId },
@@ -404,24 +477,44 @@ export const distributeAidOnChain = async (applicationId) => {
     data: {
       entityType: "Application",
       entityId: applicationId,
-      action: "AID_DISTRIBUTED",
+      action: "ONCHAIN_DISTRIBUTE",
       actorRole: "GOVERNMENT",
       txHash: receipt.hash,
       metadata: {
         onchainId: application.onchainId.toString(),
+        beneficiaryOnChain: onchainAppAfter.beneficiary,
         recipientWallet: application.student.walletAddress,
         amount: application.amount ? application.amount.toString() : "0",
+        transferTxHash,
       },
     },
   });
+  if (transferTxHash) {
+    await prisma.auditLog.create({
+      data: {
+        entityType: "Application",
+        entityId: applicationId,
+        action: "OFFCHAIN_TRANSFER_TO_STUDENT",
+        actorRole: "GOVERNMENT",
+        txHash: transferTxHash,
+        metadata: {
+          from: govSigner.address,
+          to: application.student.walletAddress,
+          amount: application.amount ? application.amount.toString() : "0",
+        },
+      },
+    });
+  }
 
-  logger.info(`[Blockchain] Aid distributed. TxHash: ${receipt.hash}`);
+  logger.info(`[Blockchain] Aid distributed. distributeTx=${receipt.hash}${transferTxHash ? ` transferTx=${transferTxHash}` : ""}`);
 
   return {
     applicationId,
     txHash: receipt.hash,
     onchainStatus: "DISTRIBUTED",
     recipientWallet: application.student.walletAddress,
+    amount: application.amount ? application.amount.toString() : "0",
+    transferTxHash,
   };
 };
 
