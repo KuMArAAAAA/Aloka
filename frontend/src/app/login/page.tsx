@@ -26,18 +26,19 @@ import {
   clearStudentSessions,
   clearOfficialSessions,
   hasActiveOfficialSession,
+  clearAllSessions,
 } from "@/lib/session";
 
 interface OfficialUser {
   id: string;
   email: string;
-  role: "SCHOOL";
+  role: "SCHOOL" | "GOVERNMENT";
   school?: { id: string; name: string; npsn: string } | null;
 }
 
 export default function LoginPage() {
   const router = useRouter();
-  const { account } = useWeb3();
+  const { account, disconnectWallet } = useWeb3();
 
   const [activeTab, setActiveTab] = useState<"siswa" | "sekolah">("siswa");
 
@@ -57,18 +58,29 @@ export default function LoginPage() {
   const API_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api/v1";
 
-  // Restore official session dari sessionStorage saat halaman dimuat.
-  // sessionStorage auto-clears saat tab ditutup — user tidak perlu logout manual.
+  // Pastikan sesi lama bersih total jika tiba setelah logout, idle, atau expired
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      const reason = searchParams.get("reason");
+      if (reason === "logout" || reason === "expired" || reason === "idle") {
+        clearAllSessions();
+        try {
+          disconnectWallet();
+        } catch {}
+        setOfficialUser(null);
+        return;
+      }
+    }
+
     const u = getOfficialSession<OfficialUser>();
-    if (u && u.id && u.role === "SCHOOL" && hasActiveOfficialSession()) {
+    if (u && u.id && (u.role === "SCHOOL" || u.role === "GOVERNMENT") && hasActiveOfficialSession()) {
       setOfficialUser(u);
       setEmail(u.email);
     } else if (u) {
-      // Sisa session tanpa token aktif (misal tab dibuka lama) → bersihkan.
       clearOfficialSessions();
     }
-  }, []);
+  }, [disconnectWallet]);
 
   // ---- Handler: Login Siswa ----
   const handleStudentLogin = async (e: React.FormEvent) => {
@@ -132,15 +144,15 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        if (data.data.user.role !== "SCHOOL") {
+        if (data.data.user.role !== "SCHOOL" && data.data.user.role !== "GOVERNMENT") {
           throw new Error(
-            "Akses ditolak. Portal ini hanya untuk verifikator sekolah dalam alur PIP."
+            "Akses ditolak. Portal ini hanya untuk verifikator sekolah dan pengelola pemerintah (KPA)."
           );
         }
         const user: OfficialUser = {
           id: data.data.user.id,
           email: data.data.user.email,
-          role: "SCHOOL",
+          role: data.data.user.role,
           school: data.data.user.school || null,
         };
         setOfficialUser(user);
@@ -148,6 +160,12 @@ export default function LoginPage() {
         setOfficialToken(data.data.accessToken);
         // Drop student session (segration between tabs)
         clearStudentSessions();
+
+        if (user.role === "GOVERNMENT") {
+          router.push("/pemerintah");
+        } else {
+          router.push("/sekolah");
+        }
         return;
       }
       throw new Error(data.message || "Email atau password salah.");
@@ -161,7 +179,11 @@ export default function LoginPage() {
 
   const handleOfficialRedirect = () => {
     if (!officialUser) return;
-    router.push("/sekolah");
+    if (officialUser.role === "GOVERNMENT") {
+      router.push("/pemerintah");
+    } else {
+      router.push("/sekolah");
+    }
   };
 
   return (
@@ -209,7 +231,7 @@ export default function LoginPage() {
               }`}
             >
               <School className="w-4 h-4 text-blue-600" />
-              <span>Sekolah</span>
+              <span>Petugas (Sekolah / KPA)</span>
             </button>
           </div>
         </div>
@@ -338,20 +360,35 @@ export default function LoginPage() {
                   className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {officialLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                  <span>{officialLoading ? "Memverifikasi..." : "Masuk Akun Sekolah"}</span>
+                  <span>{officialLoading ? "Memverifikasi..." : "Masuk Akun Petugas"}</span>
                   {!officialLoading && <ArrowRight className="w-4 h-4" />}
                 </button>
 
-                <p className="text-xs text-slate-500 pt-1">
-                  Demo kredensial:{" "}
-                  <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">
-                    sman1pwt@sekolah.id
-                  </code>{" "}
-                  /{" "}
-                  <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">
-                    Password123!
-                  </code>
-                </p>
+                <div className="text-xs text-slate-500 pt-1 space-y-1">
+                  <div>Klik cepat akun uji coba demo:</div>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEmail("sman1pwt@sekolah.id");
+                        setPassword("Password123!");
+                      }}
+                      className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-blue-700 font-mono text-[11px]"
+                    >
+                      Sekolah: sman1pwt@sekolah.id
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEmail("admin@kemendikbud.go.id");
+                        setPassword("Password123!");
+                      }}
+                      className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-indigo-700 font-mono text-[11px]"
+                    >
+                      KPA: admin@kemendikbud.go.id
+                    </button>
+                  </div>
+                </div>
               </form>
             )}
 
@@ -369,10 +406,17 @@ export default function LoginPage() {
                         {officialUser.email}
                       </p>
                       <div className="flex items-center gap-2 mt-2 flex-wrap">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                          Verifikator Satuan Pendidikan (Kepala Sekolah)
-                        </span>
+                        {officialUser.role === "GOVERNMENT" ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            Kuasa Pengguna Anggaran (KPA DJPb / Kemendikbud)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            Verifikator Satuan Pendidikan (Kepala Sekolah)
+                          </span>
+                        )}
                         {officialUser.school && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                             <Building2 className="w-3.5 h-3.5" />
@@ -392,12 +436,12 @@ export default function LoginPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <h3 className="text-sm font-semibold text-slate-900">
-                        Web3 Wallet untuk Verifikasi On-Chain
+                        Web3 Wallet untuk Eksekusi On-Chain
                       </h3>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        Wajib hubungkan dompet untuk verifikasi on-chain kelayakan
-                        siswa PIP. Setiap aksi akan ditandatangani oleh wallet
-                        yang Anda hubungkan.
+                        {officialUser.role === "GOVERNMENT"
+                          ? "Hubungkan dompet pengelola escrow untuk injeksi dana pagu atau verifikasi langsung."
+                          : "Wajib hubungkan dompet untuk verifikasi on-chain kelayakan siswa PIP."}
                       </p>
                     </div>
                   </div>
@@ -414,7 +458,11 @@ export default function LoginPage() {
                   onClick={handleOfficialRedirect}
                   className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors shadow-xs flex items-center justify-center gap-2"
                 >
-                  <span>Buka Dashboard Verifikasi</span>
+                  <span>
+                    {officialUser.role === "GOVERNMENT"
+                      ? "Buka Dashboard Alokasi KPA"
+                      : "Buka Dashboard Verifikasi Sekolah"}
+                  </span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
 

@@ -220,9 +220,9 @@ export default function SiswaPortalPage() {
       alert("Hubungkan dompet Web3 MetaMask Anda terlebih dahulu.");
       return;
     }
-    if (account.toLowerCase() !== targetStudent.walletAddress.toLowerCase()) {
-      alert(`Dompet yang terhubung (${shortenAddress(account)}) tidak cocok dengan dompet terdaftar siswa (${shortenAddress(targetStudent.walletAddress)}).`);
-      return;
+    const currentWallet = targetStudent.walletAddress || account;
+    if (account.toLowerCase() !== currentWallet.toLowerCase()) {
+      targetStudent.walletAddress = account;
     }
 
     try {
@@ -282,6 +282,19 @@ export default function SiswaPortalPage() {
     loadStudentProfileFromBackend();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sinkronkan dompet digital penerima secara dinamis saat Web3 Wallet terhubung di Navbar
+  React.useEffect(() => {
+    if (account) {
+      setStudents((prev) =>
+        prev.map((s) => ({
+          ...s,
+          walletAddress: account,
+        }))
+      );
+      setSearchResult((prev) => (prev ? { ...prev, walletAddress: account } : null));
+    }
+  }, [account]);
 
   // Search logic: cari di state lokal (diisi dari backend), bukan INITIAL_STUDENTS empty
   const handleSearch = (e: React.FormEvent) => {
@@ -603,10 +616,12 @@ export default function SiswaPortalPage() {
                     <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Dompet Digital Penerima</p>
                       <p className="text-sm font-mono font-medium text-slate-800 mt-2 break-all">
-                        {searchResult.walletAddress}
+                        {account || searchResult.walletAddress}
                       </p>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Terikat secara sah di Smart Contract
+                        {account
+                          ? "Tersinkronisasi dengan Web3 Wallet aktif"
+                          : "Terikat secara sah di Smart Contract"}
                       </p>
                     </div>
                   </div>

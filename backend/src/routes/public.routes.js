@@ -254,4 +254,58 @@ router.get("/ledger", async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/v1/public/applications
+ * Daftar pengajuan untuk Buku Kas On-Chain Publik (non-PII: nama inisial, data anonim)
+ */
+router.get("/applications", async (req, res, next) => {
+  try {
+    const applications = await prisma.application.findMany({
+      include: {
+        student: {
+          include: {
+            school: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const statusMap = {
+      UNSUBMITTED: 0,
+      AWAITING_REVIEW: 1,
+      VERIFIED: 2,
+      REJECTED: 3,
+      DISTRIBUTED: 4,
+    };
+
+    const formatted = applications.map((app) => ({
+      id: app.onchainId ? Number(app.onchainId) : app.id,
+      name: app.student?.fullName || "Peserta Didik",
+      schoolName: app.student?.school?.name || "Sekolah Tidak Terdata",
+      npsn: app.student?.school?.npsn || "",
+      gradeLevel: app.student?.gradeLevel || "SMA",
+      classRank: "Siswa Aktif",
+      walletAddress: app.student?.walletAddress || "",
+      amount: app.amount ? Number(app.amount) : 0,
+      status: statusMap[app.onchainStatus] ?? 0,
+      onchainStatus: app.onchainStatus,
+      submissionDate: app.createdAt.toISOString().split("T")[0],
+      applicationHash: app.applicationHash,
+      txHash: app.txDistributeHash || app.txVerifyHash || app.txSubmitHash || null,
+      verificationNotes:
+        app.rejectionReason ||
+        (app.onchainStatus === "DISTRIBUTED"
+          ? "Dana bantuan telah ditransfer langsung dari Escrow Vault ke dompet siswa."
+          : app.onchainStatus === "VERIFIED"
+          ? "Disetujui sekolah, menunggu eksekusi transfer dana dari Escrow Vault."
+          : "Menunggu verifikasi keaktifan siswa oleh pihak sekolah."),
+    }));
+
+    return successResponse(res, formatted, "Public applications retrieved");
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

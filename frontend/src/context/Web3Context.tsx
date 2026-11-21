@@ -320,7 +320,8 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     const browserProvider = new ethers.BrowserProvider(eth);
 
     const handleAccountsChanged = (accounts: string[]) => {
-      if (accounts.length > 0) {
+      const isConnected = sessionStore?.getItem(SESSION_KEY) === "1";
+      if (accounts.length > 0 && isConnected) {
         const newAcc = accounts[0];
         setAccount(newAcc);
         browserProvider
@@ -334,7 +335,9 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           sessionStore?.removeItem(SESSION_KEY);
         } catch {}
-        pushNotif("info", "Dompet diputus dari browser.");
+        if (isConnected) {
+          pushNotif("info", "Dompet diputus dari browser.");
+        }
       }
     };
 
@@ -358,12 +361,12 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     eth.on("accountsChanged", handleAccountsChanged);
     eth.on("chainChanged", handleChainChanged);
 
-    // Try silent reconnect if user previously connected in this tab
+    // Reconnect hanya jika user sebelumnya secara aktif telah menghubungkan dompet di sesi ini
     const tryReconnect = sessionStore?.getItem(SESSION_KEY) === "1";
     browserProvider
       .send("eth_accounts", [])
       .then(async (accounts: string[]) => {
-        if (accounts.length > 0) {
+        if (accounts.length > 0 && tryReconnect) {
           setAccount(accounts[0]);
           const net = await browserProvider.getNetwork();
           setChainId(Number(net.chainId));
@@ -374,10 +377,10 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
           } catch {
             setSigner(null);
           }
-        } else if (tryReconnect) {
-          // Session flag exists but MetaMask not authorized — keep flag for next click
-          setProvider(browserProvider);
         } else {
+          // Jika tidak ada sesi aktif (misal setelah logout), pastikan akun terputus
+          setAccount(null);
+          setSigner(null);
           setProvider(browserProvider);
         }
       })

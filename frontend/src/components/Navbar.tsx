@@ -9,6 +9,7 @@ import {
   Home,
   GraduationCap,
   School,
+  Building2,
   BarChart3,
   Menu,
   X,
@@ -29,6 +30,7 @@ const NAV_LINKS = [
   { href: "/", label: "Beranda", icon: Home },
   { href: "/siswa", label: "Portal Siswa", icon: GraduationCap },
   { href: "/sekolah", label: "Verifikasi Sekolah", icon: School },
+  { href: "/pemerintah", label: "Alokasi KPA", icon: Building2 },
   { href: "/transparansi", label: "Audit & Transparansi", icon: BarChart3 },
 ];
 
@@ -64,15 +66,20 @@ export const Navbar: React.FC = () => {
     || officialSession?.email;
 
   // Filter navigasi berdasarkan hak akses peran:
-  // - Di halaman login atau saat belum login: HILANGKAN menu "Portal Siswa" & "Verifikasi Sekolah"
-  // - Jika login sebagai Siswa: HILANGKAN menu "Verifikasi Sekolah"
-  // - Jika login sebagai Sekolah: HILANGKAN menu "Portal Siswa"
+  // - Di halaman login atau saat belum login: HILANGKAN menu "Portal Siswa", "Verifikasi Sekolah", & "Alokasi KPA"
+  // - Jika login sebagai Siswa: HILANGKAN menu "Verifikasi Sekolah" & "Alokasi KPA"
+  // - Jika login sebagai Sekolah: HILANGKAN menu "Portal Siswa" & "Alokasi KPA"
+  // - Jika login sebagai KPA Pemerintah: HILANGKAN menu "Portal Siswa" & "Verifikasi Sekolah"
   const accessibleLinks = NAV_LINKS.filter(({ href }) => {
+    const isGov = (officialSession as any)?.role === "GOVERNMENT";
+    const isSchool = !!officialSession && !isGov;
+
     if (isLoginPage || (!studentSession && !officialSession)) {
-      if (href === "/siswa" || href === "/sekolah") return false;
+      if (href === "/siswa" || href === "/sekolah" || href === "/pemerintah") return false;
     }
-    if (studentSession && href === "/sekolah") return false;
-    if (officialSession && href === "/siswa") return false;
+    if (studentSession && (href === "/sekolah" || href === "/pemerintah")) return false;
+    if (isSchool && (href === "/siswa" || href === "/pemerintah")) return false;
+    if (isGov && (href === "/siswa" || href === "/sekolah")) return false;
     return true;
   });
 
@@ -207,9 +214,10 @@ export const Navbar: React.FC = () => {
               <Link
                 href="/login"
                 onClick={() => setOpen(false)}
-                className="w-full text-center py-2 text-sm font-medium text-white bg-blue-600 rounded-lg"
+                className="w-full text-center py-2 text-sm font-medium text-white bg-blue-600 rounded-lg flex items-center justify-center gap-2"
               >
-                Masuk Portal
+                <LogIn className="w-4 h-4" />
+                <span>Masuk Portal</span>
               </Link>
             ) : null}
           </div>

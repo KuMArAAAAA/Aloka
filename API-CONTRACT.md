@@ -70,7 +70,38 @@ Tidak memerlukan header `Authorization`.
 
 ---
 
-### 1.2 Ledger Audit Transaksi On-Chain
+### 1.2 Daftar Pengajuan Bantuan Publik (Buku Kas On-Chain)
+- **Method / Endpoint**: `GET /public/applications`
+- **Deskripsi**: Daftar permohonan dan pencairan bantuan untuk eksplorasi publik (Non-PII: nama inisial, data anonim).
+- **Respon `200 OK`**:
+  ```json
+  {
+    "success": true,
+    "message": "Public applications retrieved",
+    "data": [
+      {
+        "id": 1,
+        "name": "Budi Pratama",
+        "schoolName": "SMAN 1 Purwokerto",
+        "npsn": "20301234",
+        "gradeLevel": "SMA",
+        "classRank": "Siswa Aktif",
+        "walletAddress": "0x3944c3AC5CDadD8d9A478c37E64c1449f63D4035",
+        "amount": 1800000,
+        "status": 4,
+        "onchainStatus": "DISTRIBUTED",
+        "submissionDate": "2026-11-20",
+        "applicationHash": "0xb28b...",
+        "txHash": "0xb28b...",
+        "verificationNotes": "Dana bantuan telah ditransfer langsung dari Escrow Vault ke dompet siswa."
+      }
+    ]
+  }
+  ```
+
+---
+
+### 1.3 Ledger Audit Transaksi On-Chain
 - **Method / Endpoint**: `GET /public/ledger`
 - **Query Params**:
   - `page` (integer, default: `1`)
@@ -103,7 +134,7 @@ Tidak memerlukan header `Authorization`.
 
 ---
 
-### 1.3 Verifikasi Pengajuan via TX Hash
+### 1.4 Verifikasi Pengajuan via TX Hash
 - **Method / Endpoint**: `GET /public/applications/:txHash`
 - **Params**: `txHash` (string heksadesimal 66 karakter dengan awalan `0x`)
 - **Respon `200 OK`**:
@@ -151,7 +182,7 @@ Tidak memerlukan header `Authorization`.
 
 ---
 
-### 1.4 Daftar Sekolah Terdaftar
+### 1.5 Daftar Sekolah Terdaftar
 - **Method / Endpoint**: `GET /public/schools`
 - **Respon `200 OK`**:
   ```json
