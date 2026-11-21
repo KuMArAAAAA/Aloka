@@ -61,3 +61,23 @@ export const STATUS_LABELS: Record<EscrowStatus, { label: string; color: string;
     description: "Dana bantuan telah ditransfer langsung dari Escrow Vault ke wallet siswa tanpa perantara.",
   },
 };
+
+/**
+ * Map backend OnchainStatus string ke EscrowStatus enum frontend.
+ * Backend: UNSUBMITTED | AWAITING_REVIEW | VERIFIED | DISTRIBUTED | REJECTED
+ */
+export function mapOnchainStatus(status: string): EscrowStatus {
+  switch ((status || "").toUpperCase()) {
+    case "DISTRIBUTED":
+      return EscrowStatus.Tersalurkan;
+    case "VERIFIED":
+      return EscrowStatus.Terverifikasi;
+    case "AWAITING_REVIEW":
+      return EscrowStatus.MenungguVerifikasi;
+    case "REJECTED":
+      return EscrowStatus.Ditolak;
+    case "UNSUBMITTED":
+    default:
+      return EscrowStatus.BelumAda;
+  }
+}

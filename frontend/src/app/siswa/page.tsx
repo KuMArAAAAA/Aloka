@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useWeb3 } from "@/context/Web3Context";
-import { formatIDR, EscrowStatus, shortenAddress } from "@/lib/utils";
+import { formatIDR, EscrowStatus, shortenAddress, mapOnchainStatus } from "@/lib/utils";
 import { INITIAL_STUDENTS, PIP_AID_CRITERIA, StudentRecord } from "@/lib/mockData";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ethers } from "ethers";
@@ -20,6 +20,7 @@ import {
   Sparkles,
   ExternalLink,
   Lock,
+  Loader2,
 } from "lucide-react";
 
 export default function SiswaPortalPage() {
@@ -54,6 +55,142 @@ export default function SiswaPortalPage() {
   // Claim State
   const [isClaiming, setIsClaiming] = useState(false);
   const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null);
+
+  // Profile fetch state
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api/v1";
+
+  // Konversi response backend application/me -> StudentRecord
+  const buildRecordFromBackend = (app: any): StudentRecord => {
+    const student = app.student || {};
+    const school = student.school || {};
+    const status: EscrowStatus = mapOnchainStatus(app.onchainStatus);
+    const amount = Number(app.amount || 0);
+    const txHash =
+      app.txDistributeHash || app.txVerifyHash || app.txSubmitHash || undefined;
+    const submissionDate = (app.createdAt || new Date().toISOString()).split("T")[0];
+    const verificationNotes =
+      status === EscrowStatus.Tersalurkan
+        ? "Dana bantuan telah ditransfer ke dompet Anda melalui Smart Contract Escrow."
+        : status === EscrowStatus.Terverifikasi
+        ? "Sekolah telah memvalidasi kelayakan Anda. Menunggu penyaluran dari Escrow Vault."
+        : status === EscrowStatus.Ditolak
+        ? app.rejectionReason || "Pengajuan ditolak oleh verifikator."
+        : "Menunggu tanda tangan digital dari satuan pendidikan.";
+
+    return {
+      id: app.onchainId || app.id || Math.floor(Math.random() * 1_000_000),
+      nisn: student.nisn || "",
+      name: student.fullName || "Peserta Didik",
+      schoolName: school.name || "Sekolah Tidak Terdata",
+      npsn: school.npsn || "",
+      gradeLevel: student.gradeLevel || "SMA",
+      classRank: "Siswa Aktif",
+      walletAddress: student.walletAddress || "",
+      amount,
+      status,
+      submissionDate,
+      applicationHash: app.applicationHash || "",
+      txHash,
+      verificationNotes,
+    };
+  };
+
+  // Fetch profil + application siswa dari backend setelah login
+  const loadStudentProfileFromBackend = async () => {
+    const token = localStorage.getItem("aloka_token");
+    const sessionRaw = localStorage.getItem("aloka_student_session");
+    if (!token || !sessionRaw) return;
+
+    let session: any;
+    try {
+      session = JSON.parse(sessionRaw);
+    } catch {
+      return;
+    }
+
+    setLoadingProfile(true);
+    setProfileError(null);
+    try {
+      const res = await fetch(`${API_URL}/applications/me`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.data) {
+        const record = buildRecordFromBackend(data.data);
+        setStudents([record]);
+        setSearchResult(record);
+        setHasSearched(true);
+        setSearchNisn(record.nisn);
+        setFormNisn(record.nisn);
+        setFormName(record.name);
+        setFormSchool(record.schoolName);
+        setFormGrade(record.gradeLevel);
+      } else if (!res.ok && data?.error?.code === "APPLICATION_NOT_FOUND") {
+        // Siswa valid tapi belum punya application — tampilkan profil dasar
+        const basicRecord: StudentRecord = {
+          id: Math.floor(Math.random() * 1_000_000),
+          nisn: session.nisn || "",
+          name: session.fullName || "Peserta Didik",
+          schoolName: session.school?.name || "Sekolah Tidak Terdata",
+          npsn: session.school?.npsn || "",
+          gradeLevel: session.gradeLevel || "SMA",
+          classRank: "Siswa Aktif",
+          walletAddress: session.walletAddress || "",
+          amount: 0,
+          status: EscrowStatus.BelumAda,
+          submissionDate: new Date().toISOString().split("T")[0],
+          applicationHash: "",
+          verificationNotes: "Anda belum memiliki pengajuan PIP on-chain. Silakan ajukan melalui formulir di bawah.",
+        };
+        setStudents([basicRecord]);
+        setSearchResult(basicRecord);
+        setHasSearched(true);
+        setFormNisn(basicRecord.nisn);
+        setFormName(basicRecord.name);
+        setFormSchool(basicRecord.schoolName);
+        setFormGrade(basicRecord.gradeLevel);
+      } else if (!res.ok) {
+        setProfileError(data?.message || "Gagal memuat profil dari server.");
+      }
+    } catch (err: any) {
+      console.warn("Fetch /applications/me failed:", err?.message);
+      setProfileError("Backend tidak dapat dijangkau. Memuat data sesi lokal.");
+      // Fallback ke session lokal minimal
+      if (session) {
+        const fallback: StudentRecord = {
+          id: Math.floor(Math.random() * 1_000_000),
+          nisn: session.nisn || "",
+          name: session.fullName || "Peserta Didik",
+          schoolName: session.school?.name || "Sekolah Tidak Terdata",
+          npsn: session.school?.npsn || "",
+          gradeLevel: session.gradeLevel || "SMA",
+          classRank: "Siswa Aktif",
+          walletAddress: session.walletAddress || "",
+          amount: 0,
+          status: EscrowStatus.BelumAda,
+          submissionDate: new Date().toISOString().split("T")[0],
+          applicationHash: "",
+          verificationNotes: "Mode offline — data dari sesi lokal. Hubungkan ke backend untuk data live.",
+        };
+        setStudents([fallback]);
+        setSearchResult(fallback);
+        setHasSearched(true);
+        setFormNisn(fallback.nisn);
+        setFormName(fallback.name);
+        setFormSchool(fallback.schoolName);
+        setFormGrade(fallback.gradeLevel);
+      }
+    } finally {
+      setLoadingProfile(false);
+    }
+  };
 
   // Handler: Klaim Bantuan Siswa (Claim Verification Engine)
   const handleStudentClaim = async (targetStudent: StudentRecord) => {
@@ -105,7 +242,7 @@ export default function SiswaPortalPage() {
     }
   };
 
-  // Check login session
+  // Check login session + fetch profile dari backend
   React.useEffect(() => {
     const raw = localStorage.getItem("aloka_student_session");
     if (raw) {
@@ -116,25 +253,33 @@ export default function SiswaPortalPage() {
           setSearchNisn(parsed.nisn);
           setFormNisn(parsed.nisn);
           setFormName(parsed.fullName || "");
-          const match = students.find((s) => s.nisn === parsed.nisn);
-          if (match) {
-            setSearchResult(match);
-            setHasSearched(true);
-          }
         }
       } catch {
         // ignore
       }
     }
+    // Fetch data live dari backend
+    loadStudentProfileFromBackend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Search logic
+  // Search logic: cari di state lokal (diisi dari backend), bukan INITIAL_STUDENTS empty
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setHasSearched(true);
     const cleaned = searchNisn.trim();
+    if (!cleaned) {
+      setSearchResult(null);
+      return;
+    }
+    // 1) Cari di students (sudah berisi data dari backend /apps/me)
     const found = students.find((s) => s.nisn === cleaned);
-    setSearchResult(found || null);
+    if (found) {
+      setSearchResult(found);
+      return;
+    }
+    // 2) Jika belum ada di state lokal (mis. user cari NISN lain), tampilkan not found
+    setSearchResult(null);
   };
 
   // Submit on-chain application
@@ -224,6 +369,19 @@ export default function SiswaPortalPage() {
               : "Periksa status kelayakan bantuan dana Program Indonesia Pintar Anda berdasarkan data resmi Dapodik. Dana bantuan disalurkan langsung dari Smart Contract ke dompet digital tanpa perantara."}
           </p>
         </div>
+
+        {loadingProfile && (
+          <div className="mt-5 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-xs font-medium border border-blue-200">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span>Memuat profil dan status aplikasi dari server...</span>
+          </div>
+        )}
+        {profileError && !loadingProfile && (
+          <div className="mt-5 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-800 text-xs font-medium border border-amber-200">
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>{profileError}</span>
+          </div>
+        )}
 
         {/* Saldo jika Wallet terhubung */}
         {account && (
