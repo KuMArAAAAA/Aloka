@@ -5,7 +5,10 @@ import { ethers } from "ethers";
 import { CONTRACT_ADDRESSES, NETWORK_CONFIG } from "../contracts/addresses";
 import { ALOKA_ESCROW_ABI, MOCK_IDR_ABI } from "../contracts/abis";
 
+// sessionStorage — auto-clears when tab/browser closes, so wallet state
+// is never persisted overnight.
 const SESSION_KEY = "aloka_wallet_connected";
+const sessionStore = typeof window !== "undefined" ? window.sessionStorage : null;
 
 type NotifKind = "error" | "info" | "success";
 interface Notif {
@@ -271,7 +274,7 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
       setSigner(currentSigner);
 
       try {
-        localStorage.setItem(SESSION_KEY, "1");
+        sessionStore?.setItem(SESSION_KEY, "1");
       } catch {}
 
       if (Number(network.chainId) !== NETWORK_CONFIG.chainId) {
@@ -298,7 +301,7 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsValidator(false);
     setUserMidrBalance(BigInt(0));
     try {
-      localStorage.removeItem(SESSION_KEY);
+      sessionStore?.removeItem(SESSION_KEY);
     } catch {}
     pushNotif("info", "Koneksi dompet diputus dari Aloka. MetaMask tetap aktif di browser.", 4000);
   }, [pushNotif]);
@@ -329,7 +332,7 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         setAccount(null);
         setSigner(null);
         try {
-          localStorage.removeItem(SESSION_KEY);
+          sessionStore?.removeItem(SESSION_KEY);
         } catch {}
         pushNotif("info", "Dompet diputus dari browser.");
       }
@@ -355,8 +358,8 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     eth.on("accountsChanged", handleAccountsChanged);
     eth.on("chainChanged", handleChainChanged);
 
-    // Try silent reconnect if user previously connected
-    const tryReconnect = localStorage.getItem(SESSION_KEY) === "1";
+    // Try silent reconnect if user previously connected in this tab
+    const tryReconnect = sessionStore?.getItem(SESSION_KEY) === "1";
     browserProvider
       .send("eth_accounts", [])
       .then(async (accounts: string[]) => {
