@@ -73,11 +73,15 @@ export function mapOnchainStatus(status: string): EscrowStatus {
     case "VERIFIED":
       return EscrowStatus.Terverifikasi;
     case "AWAITING_REVIEW":
+    case "UNSUBMITTED":
+      // UNSUBMITTED = application sudah dibuat siswa di backend, menunggu verifikasi sekolah.
+      // SC submit belum dieksekusi, tetapi dari sudut pandang verifikator sekolah,
+      // pengajuan sudah masuk antrian verifikasi.
       return EscrowStatus.MenungguVerifikasi;
     case "REJECTED":
       return EscrowStatus.Ditolak;
-    case "UNSUBMITTED":
     default:
+      // Status kosong / null = siswa belum pernah membuat application row sama sekali
       return EscrowStatus.BelumAda;
   }
 }

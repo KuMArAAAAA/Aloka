@@ -3,7 +3,7 @@ import { Router } from "express";
 import * as appController from "../controllers/application.controller.js";
 import { authenticateToken, requireRole } from "../middleware/auth.middleware.js";
 import { validateRequest } from "../middleware/validate.middleware.js";
-import { createApplicationSchema, listApplicationsQuerySchema } from "../schemas/application.schema.js";
+import { createApplicationSchema, listApplicationsQuerySchema, verifyApplicationManualSchema } from "../schemas/application.schema.js";
 
 const router = Router();
 
@@ -39,6 +39,15 @@ router.get(
   authenticateToken,
   requireRole("GOVERNMENT", "SCHOOL", "STUDENT"),
   appController.getApplicationById
+);
+
+// POST /api/v1/applications/:id/verify-manual - Sekolah verifikasi pengajuan tanpa smart contract call
+router.post(
+  "/:id/verify-manual",
+  authenticateToken,
+  requireRole("SCHOOL", "GOVERNMENT"),
+  validateRequest(verifyApplicationManualSchema),
+  appController.verifyApplicationManual
 );
 
 export default router;

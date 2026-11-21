@@ -38,6 +38,7 @@ export default function SekolahDashboardPage() {
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [schoolInfo, setSchoolInfo] = useState<{ name: string; npsn?: string } | null>(null);
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api/v1";
 
   // Proteksi hak akses: Siswa DILARANG mengakses halaman verifikasi sekolah!
   useEffect(() => {
@@ -64,14 +65,32 @@ export default function SekolahDashboardPage() {
 
   // Konversi student dari backend ke StudentRecord frontend
   const mapSchoolStudentToRecord = (item: any, fallbackSchoolName: string): StudentRecord => {
-    const latestApp = (item.applications && item.applications.length > 0 ? item.applications[0] : null) || item.latestApplication || {};
-    const onchainStatus = latestApp.onchainStatus || (latestApp.status === 4 ? "DISTRIBUTED" : latestApp.status === 2 ? "VERIFIED" : "UNSUBMITTED");
-    const status = mapOnchainStatus(onchainStatus);
-    const amount = Number(latestApp.amount || 1800000);
-    const txHash = latestApp.txDistributeHash || latestApp.txVerifyHash || latestApp.txSubmitHash || latestApp.txHash;
+    const latestApp =
+      (item.applications && item.applications.length > 0 ? item.applications[0] : null) ||
+      item.latestApplication ||
+      null;
+    const hasAppRow = Boolean(latestApp && (latestApp.id || latestApp.applicationHash));
+
+    // Status determination:
+    // - Tidak ada application row → BelumAda (siswa belum pernah mengajukan PIP)
+    // - Ada application row, UNSUBMITTED/AWAITING_REVIEW → MenungguVerifikasi (sudah diajukan, antri verifikasi sekolah)
+    // - Status lainnya (VERIFIED/DISTRIBUTED/REJECTED) → ikut mapping standar
+    let status: EscrowStatus;
+    if (!hasAppRow) {
+      status = EscrowStatus.BelumAda;
+    } else {
+      status = mapOnchainStatus(latestApp.onchainStatus || "UNSUBMITTED");
+    }
+
+    const defaultAmountByGrade =
+      item.gradeLevel === "SD" ? 450_000 : item.gradeLevel === "SMP" ? 750_000 : 1_800_000;
+    const amount = Number(latestApp?.amount || defaultAmountByGrade);
+    const txHash =
+      latestApp?.txDistributeHash || latestApp?.txVerifyHash || latestApp?.txSubmitHash || latestApp?.txHash;
 
     return {
-      id: latestApp.onchainId || latestApp.id || item.id,
+      id: latestApp?.onchainId || latestApp?.id || item.id,
+      applicationDbId: latestApp?.id || undefined,
       nisn: item.nisn,
       name: item.fullName,
       schoolName: item.school?.name || fallbackSchoolName || "Satuan Pendidikan",
@@ -79,18 +98,20 @@ export default function SekolahDashboardPage() {
       gradeLevel: item.gradeLevel || "SMA",
       classRank: "Siswa Aktif",
       walletAddress: item.walletAddress || "",
-      amount: amount,
-      status: status,
-      submissionDate: (latestApp.createdAt || new Date().toISOString()).split("T")[0],
-      applicationHash: latestApp.applicationHash || "",
+      amount,
+      status,
+      submissionDate: (latestApp?.createdAt || new Date().toISOString()).split("T")[0],
+      applicationHash: latestApp?.applicationHash || "",
       txHash: txHash || undefined,
-      verificationNotes: item.recommendation?.referenceNumber
-        ? `Surat Rekomendasi No: ${item.recommendation.referenceNumber}`
-        : status === EscrowStatus.Tersalurkan
-        ? "Dana bantuan telah ditransfer langsung dari Escrow Vault ke dompet siswa."
-        : status === EscrowStatus.Terverifikasi
-        ? "Disetujui sekolah, menunggu eksekusi transfer dana dari Escrow Vault."
-        : "Menunggu verifikasi keaktifan siswa.",
+      verificationNotes: hasAppRow
+        ? item.recommendation?.referenceNumber
+          ? `Surat Rekomendasi No: ${item.recommendation.referenceNumber}`
+          : status === EscrowStatus.Tersalurkan
+          ? "Dana bantuan telah ditransfer langsung dari Escrow Vault ke dompet siswa."
+          : status === EscrowStatus.Terverifikasi
+          ? "Disetujui sekolah, menunggu eksekusi transfer dana dari Escrow Vault."
+          : "Menunggu verifikasi keaktifan siswa oleh satuan pendidikan."
+        : "Siswa belum mengajukan bantuan PIP.",
     };
   };
 
@@ -105,7 +126,6 @@ export default function SekolahDashboardPage() {
 
       if (token) {
         try {
-          const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api/v1";
           const res = await fetch(`${API_URL}/schools/me/students`, {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -181,6 +201,46 @@ export default function SekolahDashboardPage() {
         }
       }
 
+      // Sinkronkan status ke backend DB lewat endpoint verify-manual
+      // (memungkinkan demo alur verifikasi walau wallet sekolah tidak validator on-chain).
+      const applicationDbId = (selectedStudent as any).applicationDbId as string | undefined;
+      let backendSynced = false;
+      let syncMsg = "";
+      if (applicationDbId) {
+        const token = getOfficialToken();
+        if (token) {
+          try {
+            const res = await fetch(
+              `${API_URL}/applications/${applicationDbId}/verify-manual`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  amount: customAmount,
+                  notes: `Verifikasi manual oleh sekolah. Surat Rekomendasi No: ${recommendationLetter}`,
+                }),
+              }
+            );
+            const data = await res.json();
+            if (res.ok && data.success) {
+              backendSynced = true;
+              syncMsg = "Status tersinkron ke database backend.";
+            } else {
+              syncMsg = `Sinkronisasi DB gagal: ${data?.message || "unknown error"}`;
+            }
+          } catch (err: any) {
+            syncMsg = `Sinkronisasi DB gagal: ${err?.message || "network error"}`;
+          }
+        } else {
+          syncMsg = "Sesi sekolah habis — login ulang untuk sinkronisasi backend.";
+        }
+      } else {
+        syncMsg = "applicationDbId tidak tersedia — siswa belum submit application via backend.";
+      }
+
       setStudents((prev) =>
         prev.map((s) =>
           s.id === selectedStudent.id
@@ -188,13 +248,15 @@ export default function SekolahDashboardPage() {
                 ...s,
                 amount: customAmount,
                 status: EscrowStatus.Terverifikasi,
-                verificationNotes: `Diverifikasi resmi. Surat Rekomendasi No: ${recommendationLetter}`,
+                verificationNotes: `Diverifikasi resmi. Surat Rekomendasi No: ${recommendationLetter}${backendSynced ? " (tersinkron DB)" : ""}`,
               }
             : s
         )
       );
 
-      setActionSuccessMsg(`Pengajuan ${selectedStudent.name} berhasil disahkan on-chain.`);
+      setActionSuccessMsg(
+        `Pengajuan ${selectedStudent.name} disahkan.${backendSynced ? " " + syncMsg : " " + syncMsg}`
+      );
       setSelectedStudent(null);
       refreshContractStats();
     } catch (err: any) {

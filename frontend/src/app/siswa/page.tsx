@@ -489,11 +489,13 @@ Issued At: ${nowIso}`;
       }
 
       // Submit ke backend agar pengajuan tercatat di database
-      const backendSubmitted = await submitApplicationToBackend();
+      const backendResult = await submitApplicationToBackend();
+      const backendSubmitted = backendResult.success;
       const standardAmount = PIP_AID_CRITERIA.find((c) => c.code === formGrade)?.amount || 1800000;
 
       const newRecord: StudentRecord = {
         id: students.length + 1,
+        applicationDbId: backendResult.applicationId,
         nisn: formNisn,
         name: formName,
         schoolName: formSchool,
@@ -502,7 +504,9 @@ Issued At: ${nowIso}`;
         classRank: "Siswa Aktif",
         walletAddress: account,
         amount: standardAmount,
-        status: EscrowStatus.MenungguVerifikasi,
+        status: backendSubmitted
+          ? EscrowStatus.MenungguVerifikasi
+          : EscrowStatus.MenungguVerifikasi,
         submissionDate: new Date().toISOString().split("T")[0],
         applicationHash: hash,
         txHash: txHash,
@@ -526,12 +530,13 @@ Issued At: ${nowIso}`;
   };
 
   // Helper: POST ke /applications untuk persist pengajuan ke backend
-  const submitApplicationToBackend = async (): Promise<boolean> => {
+  // Returns { success, applicationId } so callers can sync UI state with backend DB.
+  const submitApplicationToBackend = async (): Promise<{ success: boolean; applicationId?: string; onchainId?: string | null }> => {
     const token = getStudentToken();
     const session = getStudentSession<any>();
-    if (!token || !session) return false;
+    if (!token || !session) return { success: false };
     const studentId = session.id;
-    if (!studentId) return false;
+    if (!studentId) return { success: false };
 
     try {
       const res = await fetch(`${API_URL}/applications`, {
@@ -547,13 +552,17 @@ Issued At: ${nowIso}`;
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        return true;
+        return {
+          success: true,
+          applicationId: data.data?.id,
+          onchainId: data.data?.onchainId ?? null,
+        };
       }
       console.warn("Backend /applications rejected:", data?.message || data);
-      return false;
+      return { success: false };
     } catch (err: any) {
       console.warn("Cannot reach backend /applications:", err?.message);
-      return false;
+      return { success: false };
     }
   };
 

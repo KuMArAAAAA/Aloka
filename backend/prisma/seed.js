@@ -35,7 +35,7 @@ function formatIDR(n) {
 }
 
 async function main() {
-  console.log("🌱 Starting Aloka 5-Student Database Seeding...");
+  console.log("🌱 Starting Aloka 11-Student Database Seeding...");
 
   deriveDemoWallets();
   const defaultPasswordHash = await bcrypt.hash("Password123!", 10);
@@ -133,7 +133,7 @@ async function main() {
   }
 
   // ============================
-  // 3. STUDENTS (HANYA 5 SISWA, Budi BELUM KLAIM / VERIFIED)
+  // 3. STUDENTS (11 SISWA, Dzikri & Prajna TANPA application row untuk demo alur registrasi)
   // ============================
   const studentsData = [
     {
@@ -184,6 +184,66 @@ async function main() {
       phone: "088901234567",
       grade: "SMK",
       schoolIdx: 4,
+      walletBound: false,
+    },
+    {
+      roleKey: "student_rizky_smp",
+      nisn: "0089012345",
+      fullName: "Rizky Ramadhan",
+      dob: "2011-03-12",
+      phone: "087812345001",
+      grade: "SMP",
+      schoolIdx: 2,
+      walletBound: false,
+    },
+    {
+      roleKey: "student_nabila_smp",
+      nisn: "0071234589",
+      fullName: "Nabila Zahra",
+      dob: "2012-07-25",
+      phone: "087812345002",
+      grade: "SMP",
+      schoolIdx: 2,
+      walletBound: false,
+    },
+    {
+      roleKey: "student_yoga_smp",
+      nisn: "0056789001",
+      fullName: "Yoga Pratama",
+      dob: "2010-10-18",
+      phone: "087812345003",
+      grade: "SMP",
+      schoolIdx: 2,
+      walletBound: false,
+    },
+    {
+      roleKey: "student_aisyah_smp",
+      nisn: "0044567890",
+      fullName: "Aisyah Kamila",
+      dob: "2013-02-09",
+      phone: "087812345004",
+      grade: "SMP",
+      schoolIdx: 2,
+      walletBound: false,
+    },
+    {
+      roleKey: "student_dzikri_smp",
+      nisn: "0092345678",
+      fullName: "Dzikri Aulia",
+      dob: "2012-04-08",
+      phone: "087812345005",
+      grade: "SMP",
+      schoolIdx: 2,
+      walletBound: false,
+    },
+    {
+      roleKey: "student_prajna_smp",
+      nisn: "0068901234",
+      fullName: "Prajna Wahyuni",
+      dob: "2011-11-03",
+      phone: "087812345006",
+      grade: "SMP",
+      schoolIdx: 2,
       walletBound: false,
     },
   ];
@@ -256,6 +316,10 @@ async function main() {
     { idx: 2, status: "AWAITING_REVIEW", amount: PIP_AMOUNTS.SMP },// Agus (SMP) - Menunggu Verifikasi
     { idx: 3, status: "UNSUBMITTED", amount: PIP_AMOUNTS.SD },     // Eko (SD) - Belum Diajukan
     { idx: 4, status: "REJECTED", amount: PIP_AMOUNTS.SMK },       // Dewi (SMK) - Ditolak
+    { idx: 5, status: "VERIFIED", amount: PIP_AMOUNTS.SMP },       // Rizky (SMP) - Siap Klaim
+    { idx: 6, status: "DISTRIBUTED", amount: PIP_AMOUNTS.SMP },    // Nabila (SMP) - Sudah Cair
+    { idx: 7, status: "AWAITING_REVIEW", amount: PIP_AMOUNTS.SMP },// Yoga (SMP) - Menunggu
+    { idx: 8, status: "UNSUBMITTED", amount: PIP_AMOUNTS.SMP },    // Aisyah (SMP) - Belum Diajukan
   ];
 
   const fakeTxHash = (prefix) =>
@@ -299,7 +363,7 @@ async function main() {
     console.log(`✅ Application #${app.id.slice(0, 8)}: ${student.fullName} → status ${item.status} (${formatIDR(item.amount)})`);
   }
 
-  console.log("🎉 Seeding 5 Siswa Selesai! Budi Pratama berstatus VERIFIED (Siap Klaim).");
+  console.log("🎉 Seeding 11 Siswa Selesai! Budi (SMA) & Rizky (SMP) VERIFIED siap klaim. Dzikri & Prajna (SMP) belum punya application — siap demo alur registrasi penuh.");
 }
 
 main()

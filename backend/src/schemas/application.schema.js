@@ -16,3 +16,10 @@ export const listApplicationsQuerySchema = {
     schoolId: z.string().uuid().optional(),
   }),
 };
+
+export const verifyApplicationManualSchema = {
+  body: z.object({
+    amount: z.number().positive("Nominal bantuan must be positive").optional(),
+    notes: z.string().max(500, "Notes too long").optional(),
+  }),
+};

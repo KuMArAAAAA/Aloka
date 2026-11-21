@@ -82,3 +82,21 @@ export const getApplicationById = async (req, res, next) => {
     next(error);
   }
 };
+
+export const verifyApplicationManual = async (req, res, next) => {
+  try {
+    // Tenant isolation: sekolah hanya boleh verify application milik sekolahnya
+    const requestingSchoolId = req.user.role === "SCHOOL" ? req.user.schoolId : null;
+
+    const result = await applicationService.verifyApplicationManual({
+      applicationId: req.params.id,
+      requestingSchoolId,
+      amount: req.body.amount,
+      notes: req.body.notes,
+    });
+
+    return successResponse(res, result, "Application verified manually (no on-chain call)");
+  } catch (error) {
+    next(error);
+  }
+};

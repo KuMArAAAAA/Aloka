@@ -187,10 +187,17 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
         tokenRead.balanceOf(CONTRACT_ADDRESSES.escrow).catch(() => BigInt(0)),
       ]);
 
-      setTotalFunded(funded);
-      setTotalDistributed(distributed);
-      setNextApplicationId(Number(nextId));
-      setEscrowBalance(eBalance);
+      // Preserve last good value if the RPC round failed — each .catch fallback
+      // returns BigInt(0). On Amoy public RPC a single timeout shouldn't blank
+      // the audit UI; only the first ever fetch accepts 0 as the initial state.
+      setTotalFunded((prev) => (funded === BigInt(0) && prev > BigInt(0) ? prev : funded));
+      setTotalDistributed((prev) =>
+        distributed === BigInt(0) && prev > BigInt(0) ? prev : distributed
+      );
+      setEscrowBalance((prev) => (eBalance === BigInt(0) && prev > BigInt(0) ? prev : eBalance));
+      setNextApplicationId((prev) =>
+        Number(nextId) === 1 && prev > 1 ? prev : Number(nextId)
+      );
 
       if (account) {
         const [uBal, validatorCheck, ownerCheck] = await Promise.all([

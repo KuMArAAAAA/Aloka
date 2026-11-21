@@ -177,3 +177,95 @@ export const getApplicationById = async (id) => {
     onchainId: application.onchainId ? application.onchainId.toString() : null,
   };
 };
+
+/**
+ * Verifikasi manual application oleh sekolah (TANPA smart contract call).
+ * Memungkinkan demo alur verifikasi walau wallet sekolah tidak terdaftar
+ * sebagai validator on-chain atau onchainId belum tersedia.
+ *
+ * Status transition: UNSUBMITTED | AWAITING_REVIEW → VERIFIED
+ */
+export const verifyApplicationManual = async ({ applicationId, requestingSchoolId, amount, notes }) => {
+  const application = await prisma.application.findUnique({
+    where: { id: applicationId },
+    include: { student: true },
+  });
+
+  if (!application) {
+    const error = new Error("Application not found");
+    error.statusCode = 404;
+    error.code = "APPLICATION_NOT_FOUND";
+    throw error;
+  }
+
+  // Tenant isolation: sekolah hanya boleh verify application milik sekolahnya
+  if (requestingSchoolId && application.student.schoolId !== requestingSchoolId) {
+    const error = new Error("Forbidden: Application belongs to a different school");
+    error.statusCode = 403;
+    error.code = "FORBIDDEN_SCHOOL_APPLICATION";
+    throw error;
+  }
+
+  const allowedStatuses = ["UNSUBMITTED", "AWAITING_REVIEW", "VERIFIED"];
+  if (!allowedStatuses.includes(application.onchainStatus)) {
+    const error = new Error(
+      `Application status is ${application.onchainStatus}, expected UNSUBMITTED, AWAITING_REVIEW, or VERIFIED`
+    );
+    error.statusCode = 409;
+    error.code = "INVALID_STATUS_TRANSITION";
+    throw error;
+  }
+
+  // Idempotent: if already verified, return current state without duplicate writes
+  if (application.onchainStatus === "VERIFIED") {
+    logger.info(`[Application] Manual verify no-op: ${applicationId} already VERIFIED`);
+    return {
+      ...application,
+      amount: application.amount ? application.amount.toString() : null,
+      onchainId: application.onchainId ? application.onchainId.toString() : null,
+    };
+  }
+
+  const finalAmount = amount || (application.amount ? Number(application.amount.toString()) : null);
+  if (!finalAmount || finalAmount <= 0) {
+    const error = new Error("Amount is required for verification");
+    error.statusCode = 422;
+    error.code = "AMOUNT_REQUIRED";
+    throw error;
+  }
+
+  const updated = await prisma.application.update({
+    where: { id: applicationId },
+    data: {
+      onchainStatus: "VERIFIED",
+      validationStatus: "VALID",
+      amount: BigInt(finalAmount),
+      txVerifyHash: application.txVerifyHash || `manual-verify-${Date.now()}`,
+    },
+    include: {
+      student: { include: { school: true } },
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      entityType: "Application",
+      entityId: applicationId,
+      action: "VERIFIED_MANUAL",
+      actorRole: "SCHOOL",
+      metadata: {
+        amount: finalAmount,
+        method: "manual",
+        notes: notes || "Verified via manual approve flow (no on-chain call)",
+      },
+    },
+  });
+
+  logger.info(`[Application] Manual verify: ${applicationId} → VERIFIED`);
+
+  return {
+    ...updated,
+    amount: updated.amount.toString(),
+    onchainId: updated.onchainId ? updated.onchainId.toString() : null,
+  };
+};
