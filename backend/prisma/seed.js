@@ -140,6 +140,7 @@ async function main() {
       grade: "SMA",
       schoolIdx: 0,
       walletBound: true,
+      customWallet: "0x3944c3AC5CDadD8d9A478c37E64c1449f63D4035",
     },
     {
       roleKey: "student_siti_sma",
@@ -215,8 +216,9 @@ async function main() {
 
   const students = [];
   for (const s of studentsData) {
+    // Prefer custom wallet (e.g. user-supplied) over derived demo wallet
     const walletAddr = s.walletBound
-      ? demoWallets[s.roleKey].address.toLowerCase()
+      ? (s.customWallet || demoWallets[s.roleKey].address).toLowerCase()
       : null;
 
     const student = await prisma.student.upsert({
