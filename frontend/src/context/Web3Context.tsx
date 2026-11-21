@@ -270,7 +270,33 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setIsLoading(true);
       const browserProvider = new ethers.BrowserProvider(eth);
-      const accounts: string[] = await browserProvider.send("eth_requestAccounts", []);
+
+      // wallet_requestPermissions (EIP-2255) ALWAYS shows the account picker,
+      // even when the dApp is already authorized for an account. This is the
+      // only reliable way to let users switch wallets from inside the dApp —
+      // plain eth_requestAccounts returns the previously authorized account
+      // silently, so users got stuck on the first wallet they ever connected.
+      let accounts: string[] = [];
+      try {
+        await eth.request({
+          method: "wallet_requestPermissions",
+          params: [{ eth_accounts: {} }],
+        });
+        accounts = await browserProvider.send("eth_accounts", []);
+      } catch (permErr: any) {
+        // Honor user rejection — let outer catch translate "user rejected".
+        if (permErr?.code === 4001 || permErr?.code === "ACTION_REJECTED") {
+          throw permErr;
+        }
+        // Some wallets don't support wallet_requestPermissions → fall back.
+        accounts = await browserProvider.send("eth_requestAccounts", []);
+      }
+
+      if (accounts.length === 0) {
+        pushNotif("info", "Tidak ada akun dompet yang dipilih.");
+        return;
+      }
+
       const network = await browserProvider.getNetwork();
       const currentSigner = await browserProvider.getSigner();
 
@@ -280,8 +306,11 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
       setProvider(browserProvider);
       setSigner(currentSigner);
 
+      // Persist the EXACT address the user chose (not a "1" flag) so that the
+      // auto-reconnect on refresh can restore the same wallet even when
+      // MetaMask returns accounts in a different order.
       try {
-        sessionStore?.setItem(SESSION_KEY, "1");
+        sessionStore?.setItem(SESSION_KEY, userAccount);
       } catch {}
 
       if (Number(network.chainId) !== NETWORK_CONFIG.chainId) {
@@ -327,10 +356,16 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     const browserProvider = new ethers.BrowserProvider(eth);
 
     const handleAccountsChanged = (accounts: string[]) => {
-      const isConnected = sessionStore?.getItem(SESSION_KEY) === "1";
+      const storedAddr = sessionStore?.getItem(SESSION_KEY);
+      const isConnected = !!storedAddr;
       if (accounts.length > 0 && isConnected) {
         const newAcc = accounts[0];
         setAccount(newAcc);
+        // Persist the newly active account so a refresh honors the user's
+        // switch instead of reverting to the first wallet ever authorized.
+        try {
+          sessionStore?.setItem(SESSION_KEY, newAcc);
+        } catch {}
         browserProvider
           .getSigner()
           .then((s) => setSigner(s))
@@ -368,13 +403,29 @@ export const Web3Provider: React.FC<{ children: React.ReactNode }> = ({ children
     eth.on("accountsChanged", handleAccountsChanged);
     eth.on("chainChanged", handleChainChanged);
 
-    // Reconnect hanya jika user sebelumnya secara aktif telah menghubungkan dompet di sesi ini
-    const tryReconnect = sessionStore?.getItem(SESSION_KEY) === "1";
+    // Reconnect hanya jika user sebelumnya secara aktif telah menghubungkan dompet di sesi ini.
+    // storedAddr sekarang berisi ALAMAT wallet yang dipilih user (bukan flag "1"),
+    // jadi refresh akan mengembalikan wallet yang sama persis — bukan accounts[0]
+    // milik MetaMask yang bisa berbeda urutan.
+    const storedAddr = sessionStore?.getItem(SESSION_KEY);
+    const tryReconnect = !!storedAddr;
     browserProvider
       .send("eth_accounts", [])
       .then(async (accounts: string[]) => {
         if (accounts.length > 0 && tryReconnect) {
-          setAccount(accounts[0]);
+          // Prefer the previously selected account; fall back to accounts[0]
+          // if the address is no longer authorized (user revoked permission).
+          const matched = accounts.find(
+            (a) => a.toLowerCase() === (storedAddr || "").toLowerCase()
+          );
+          const acc = matched || accounts[0];
+          setAccount(acc);
+          // Refresh stored address if it changed (e.g., old account revoked).
+          try {
+            if (acc.toLowerCase() !== (storedAddr || "").toLowerCase()) {
+              sessionStore?.setItem(SESSION_KEY, acc);
+            }
+          } catch {}
           const net = await browserProvider.getNetwork();
           setChainId(Number(net.chainId));
           setProvider(browserProvider);

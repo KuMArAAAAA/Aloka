@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useWeb3 } from "@/context/Web3Context";
 import { formatIDR, shortenAddress, EscrowStatus } from "@/lib/utils";
 import { INITIAL_STUDENTS, StudentRecord } from "@/lib/mockData";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -21,7 +20,38 @@ import {
 } from "lucide-react";
 
 export default function TransparansiPage() {
-  const { escrowBalance, totalDistributed } = useWeb3();
+  // === Sumber otoritatif audit: fetch LANGSUNG dari endpoint on-chain ===
+  // Sebelumnya page ini baca escrowBalance/totalDistributed dari useWeb3()
+  // (bergantung pada state WalletContext yang awalnya BigInt(0)). Itu menyebabkan
+  // flicker "kadang kembali ke semula": saat state belum ter-load, page jatuh
+  // ke fallback DB aggregate (Rp 6.6jt) walau saldo on-chain sebenarnya 46.4jt.
+  // Fix: baca /blockchain/escrow/stats (server-side read via ethers.Contract,
+  // tidak butuh wallet terhubung) sebagai sumber utama, dan HANYA fallback ke
+  // DB aggregate bila endpoint itupun gagal — dengan label "Fallback DB".
+  const [chainStats, setChainStats] = useState<{
+    totalFunded: bigint;
+    totalDistributed: bigint;
+    escrowBalance: bigint;
+    contractAddress: string | null;
+    loaded: boolean;
+    error: boolean;
+  }>({
+    totalFunded: BigInt(0),
+    totalDistributed: BigInt(0),
+    escrowBalance: BigInt(0),
+    contractAddress: null,
+    loaded: false,
+    error: false,
+  });
+
+  // Flicker protection: simpan nilai on-chain terakhir yang sukses di ref, jadi
+  // bila poll berikutnya RPC timeout, tampilkan nilai lama, bukan 0 / fallback DB.
+  const chainStatsRef = React.useRef<{
+    totalFunded: bigint;
+    totalDistributed: bigint;
+    escrowBalance: bigint;
+  } | null>(null);
+
   const [students, setStudents] = useState<StudentRecord[]>(INITIAL_STUDENTS);
   const [filterGrade, setFilterGrade] = useState<string>("ALL");
   const [loading, setLoading] = useState<boolean>(true);
@@ -34,6 +64,50 @@ export default function TransparansiPage() {
   const pageSize = 8;
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api/v1";
+
+  // Fetch statistik ON-CHAIN langsung dari endpoint server (read-only).
+  // Server membaca ethers.Contract.totalFunded/totalDistributed/balanceOf(escrow)
+  // — tidak perlu wallet user terhubung, jadi nilai stabil sejak halaman pertama
+  // dimuat. Tidak ada lagi kondisi "kembali ke semula" karena state DB aggregate
+  // sempat dipakai.
+  const fetchChainStats = async () => {
+    try {
+      const res = await fetch(`${API_URL}/blockchain/escrow/stats`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!json?.success || !json?.data) throw new Error(json?.message || "Invalid response");
+
+      const next = {
+        totalFunded: BigInt(json.data.totalFunded || "0"),
+        totalDistributed: BigInt(json.data.totalDistributed || "0"),
+        escrowBalance: BigInt(json.data.escrowBalance || "0"),
+        contractAddress: json.data.contractAddress || null,
+        loaded: true,
+        error: false,
+      };
+
+      // Persist nilai sukses di ref untuk flicker protection poll berikutnya.
+      chainStatsRef.current = {
+        totalFunded: next.totalFunded,
+        totalDistributed: next.totalDistributed,
+        escrowBalance: next.escrowBalance,
+      };
+      setChainStats(next);
+    } catch (err: any) {
+      console.warn("Chain stats fetch notice:", err?.message || err);
+      // Pertahankan nilai sukses sebelumnya kalau ada — JANGAN reset ke 0.
+      // Hanya set error flag supaya UI bisa tampilkan label "fallback DB"
+      // jika ref pun masih null (belum pernah sukses sejak halaman dimuat).
+      setChainStats((prev) => ({
+        totalFunded: chainStatsRef.current?.totalFunded ?? prev.totalFunded,
+        totalDistributed: chainStatsRef.current?.totalDistributed ?? prev.totalDistributed,
+        escrowBalance: chainStatsRef.current?.escrowBalance ?? prev.escrowBalance,
+        contractAddress: prev.contractAddress,
+        loaded: chainStatsRef.current !== null ? true : prev.loaded,
+        error: chainStatsRef.current === null,
+      }));
+    }
+  };
 
   // Fetch real data from backend
   const fetchPublicData = async () => {
@@ -76,9 +150,14 @@ export default function TransparansiPage() {
     }
   };
 
+  // Initial load: chain stats + DB data, then poll on-chain every 30s
   useEffect(() => {
+    fetchChainStats();
     fetchPublicData();
+    // Poll on-chain tiap 30s — saldo aktual selalu fresh tanpa reload manual.
+    const chainInterval = setInterval(fetchChainStats, 30_000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => clearInterval(chainInterval);
   }, []);
 
   const grades = [
@@ -107,18 +186,32 @@ export default function TransparansiPage() {
   const distributedCount = students.filter((s) => s.status === EscrowStatus.Tersalurkan).length;
   const remainingVault = Math.max(0, totalAllocated - distributedFromData);
 
-  // Nilai dinamis: gunakan on-chain jika > 0, atau stats backend jika ada, fallback ke agregat data buku kas
-  const displayPaguVault =
-    escrowBalance > BigInt(0)
-      ? escrowBalance
-      : totalAllocated;
+  // === Sumber nilai tampilan ===
+  // Prioritas: ON-CHAIN (otoritatif) > DB aggregate (fallback) > summary data lokal.
+  // Selama chainStats belum loaded (initial fetch) → return null → UI tampilkan
+  // skeleton/spinner, BUKAN DB aggregate yang menyesatkan sebagai "Pagu Vault".
+  // Setelah loaded, pakai on-chain (kalau sukses) atau DB aggregate (kalau error).
+  const chainReady = chainStats.loaded && !chainStats.error;
+  const chainLoading = !chainStats.loaded;
 
-  const displayDistributed =
-    totalDistributed > BigInt(0)
-      ? totalDistributed
-      : backendStats?.summary?.totalFundDistributedIDR
-      ? Number(backendStats.summary.totalFundDistributedIDR)
-      : distributedFromData;
+  // null = sedang loading (UI render spinner). Setelah loaded, selalu number.
+  const displayPaguVault = chainLoading
+    ? null
+    : chainReady
+    ? chainStats.escrowBalance
+    : chainStats.escrowBalance > BigInt(0)
+    ? chainStats.escrowBalance
+    : BigInt(totalAllocated);
+
+  const displayDistributed = chainLoading
+    ? null
+    : chainReady
+    ? chainStats.totalDistributed
+    : chainStats.totalDistributed > BigInt(0)
+    ? chainStats.totalDistributed
+    : backendStats?.summary?.totalFundDistributedIDR
+    ? BigInt(backendStats.summary.totalFundDistributedIDR)
+    : BigInt(distributedFromData);
 
   const displayDistributedCount =
     backendStats?.summary?.totalDistributed !== undefined
@@ -176,10 +269,15 @@ export default function TransparansiPage() {
             <span className="text-xs font-semibold uppercase tracking-wider text-blue-600">
               Keterbukaan Informasi Publik
             </span>
-            {isLiveApi ? (
+            {chainReady ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Live Database & On-Chain
+                Live On-Chain ({chainStats.contractAddress?.slice(0, 6)}…{chainStats.contractAddress?.slice(-4)})
+              </span>
+            ) : isLiveApi ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                DB Aggregate (On-Chain belum siap)
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
@@ -197,9 +295,9 @@ export default function TransparansiPage() {
 
         <div className="flex items-center gap-2.5 self-start md:self-auto">
           <button
-            onClick={fetchPublicData}
+            onClick={() => { fetchChainStats(); fetchPublicData(); }}
             disabled={loading}
-            title="Muat ulang data dari server"
+            title="Muat ulang data on-chain & server"
             className="p-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition-colors shadow-xs disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-blue-600" : ""}`} />
@@ -228,11 +326,17 @@ export default function TransparansiPage() {
               Pagu di Vault (TVL)
             </span>
             <div className="text-2xl font-bold text-slate-900">
-              {formatIDR(displayPaguVault)}
+              {displayPaguVault === null ? (
+                <Loader2 className="w-6 h-6 text-blue-600 animate-spin inline-block" />
+              ) : (
+                formatIDR(displayPaguVault)
+              )}
             </div>
             <p className="mt-1 text-xs text-slate-400">
-              {escrowBalance > BigInt(0)
-                ? "Tersimpan dalam Smart Contract"
+              {displayPaguVault === null
+                ? "Memuat dari Smart Contract…"
+                : chainStats.escrowBalance > BigInt(0)
+                ? "Tersimpan dalam Smart Contract (On-Chain)"
                 : `Total pagu dialokasikan (Sisa: ${formatIDR(remainingVault)})`}
             </p>
           </div>
@@ -242,10 +346,16 @@ export default function TransparansiPage() {
               Realisasi Tersalurkan
             </span>
             <div className="text-2xl font-bold text-emerald-600">
-              {formatIDR(displayDistributed)}
+              {displayDistributed === null ? (
+                <Loader2 className="w-6 h-6 text-emerald-600 animate-spin inline-block" />
+              ) : (
+                formatIDR(displayDistributed)
+              )}
             </div>
             <p className="mt-1 text-xs text-emerald-600 font-medium">
-              Terkonfirmasi di dompet siswa ({displayDistributedCount} Siswa)
+              {displayDistributed === null
+                ? "Memuat dari Smart Contract…"
+                : `Terkonfirmasi di dompet siswa (${displayDistributedCount} Siswa)`}
             </p>
           </div>
 

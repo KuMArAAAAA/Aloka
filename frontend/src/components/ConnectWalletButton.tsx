@@ -15,6 +15,7 @@ import {
   Download,
   Loader2,
   ChevronDown,
+  RefreshCw,
 } from "lucide-react";
 
 const METAMASK_DOWNLOAD_URL = "https://metamask.io/download/";
@@ -170,6 +171,19 @@ export const ConnectWalletButton: React.FC = () => {
           </div>
 
           <div className="px-2 pt-1">
+            <button
+              onClick={() => {
+                setDropdownOpen(false);
+                connectWallet();
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors"
+              role="menuitem"
+              title="Buka pemilih akun dompet untuk beralih ke wallet lain"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Ganti Akun</span>
+            </button>
+
             <button
               onClick={() => {
                 disconnectWallet();
