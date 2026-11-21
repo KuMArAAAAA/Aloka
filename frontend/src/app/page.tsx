@@ -8,7 +8,6 @@ import { CONTRACT_ADDRESSES } from "@/contracts/addresses";
 import {
   GraduationCap,
   School,
-  Building2,
   BarChart3,
   ShieldCheck,
   ArrowRight,
@@ -131,7 +130,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <Link
             href="/siswa"
             className="group bg-white p-5 rounded-xl border border-slate-200 hover:border-blue-500 hover:shadow-sm transition-all flex flex-col justify-between"
@@ -170,27 +169,6 @@ export default function HomePage() {
             </div>
             <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-medium text-blue-600">
               <span>Masuk Verifikasi</span>
-              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-            </div>
-          </Link>
-
-          <Link
-            href="/pemerintah"
-            className="group bg-white p-5 rounded-xl border border-slate-200 hover:border-blue-500 hover:shadow-sm transition-all flex flex-col justify-between"
-          >
-            <div>
-              <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center mb-3">
-                <Building2 className="w-5 h-5" />
-              </div>
-              <h3 className="font-semibold text-base text-slate-900 group-hover:text-blue-600 transition-colors">
-                Admin Perbendaharaan
-              </h3>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                Deposit dana APBN ke Escrow Vault, manajemen validator, dan validasi kelayakan.
-              </p>
-            </div>
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-medium text-blue-600">
-              <span>Buka Admin Vault</span>
               <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
             </div>
           </Link>

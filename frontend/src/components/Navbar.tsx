@@ -9,7 +9,6 @@ import {
   Home,
   GraduationCap,
   School,
-  Building2,
   BarChart3,
   Menu,
   X,
@@ -17,39 +16,50 @@ import {
   User,
   LogOut,
 } from "lucide-react";
+import { useWeb3 } from "@/context/Web3Context";
+import {
+  getStudentSession,
+  getOfficialSession,
+  clearAllSessions,
+  hasActiveStudentSession,
+  hasActiveOfficialSession,
+} from "@/lib/session";
 
 const NAV_LINKS = [
   { href: "/", label: "Beranda", icon: Home },
   { href: "/siswa", label: "Portal Siswa", icon: GraduationCap },
   { href: "/sekolah", label: "Verifikasi Sekolah", icon: School },
-  { href: "/pemerintah", label: "Admin Perbendaharaan", icon: Building2 },
   { href: "/transparansi", label: "Audit & Transparansi", icon: BarChart3 },
 ];
 
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
+  const { disconnectWallet } = useWeb3();
   const [open, setOpen] = useState(false);
   const [studentSession, setStudentSession] = useState<{ fullName?: string; nisn?: string } | null>(null);
+  const [officialSession, setOfficialSession] = useState<{ email?: string; school?: { name?: string } | null } | null>(null);
 
   useEffect(() => {
-    const raw = localStorage.getItem("aloka_student_session");
-    if (raw) {
-      try {
-        setStudentSession(JSON.parse(raw));
-      } catch {
-        setStudentSession(null);
-      }
-    } else {
-      setStudentSession(null);
-    }
+    const s = getStudentSession<{ fullName?: string; nisn?: string }>();
+    setStudentSession(s && hasActiveStudentSession() ? s : null);
+    const o = getOfficialSession<{ email?: string; school?: { name?: string } | null }>();
+    setOfficialSession(o && hasActiveOfficialSession() ? o : null);
   }, [pathname]);
 
   const handleLogout = () => {
-    localStorage.removeItem("aloka_student_session");
-    localStorage.removeItem("aloka_token");
+    clearAllSessions();
+    try {
+      disconnectWallet();
+    } catch {}
     setStudentSession(null);
-    window.location.href = "/";
+    setOfficialSession(null);
+    window.location.href = "/login?reason=logout";
   };
+
+  const displayName = studentSession?.fullName
+    || studentSession?.nisn
+    || (officialSession?.school?.name as string | undefined)
+    || officialSession?.email;
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200">
@@ -94,11 +104,11 @@ export const Navbar: React.FC = () => {
 
           {/* Right Actions */}
           <div className="flex items-center gap-3">
-            {studentSession ? (
+            {(studentSession || officialSession) ? (
               <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
                 <User className="w-4 h-4 text-blue-600" />
                 <span className="font-medium text-slate-800 max-w-[120px] truncate">
-                  {studentSession.fullName || studentSession.nisn}
+                  {displayName}
                 </span>
                 <button
                   type="button"
@@ -158,7 +168,7 @@ export const Navbar: React.FC = () => {
           })}
 
           <div className="pt-2 border-t border-slate-100">
-            {studentSession ? (
+            {(studentSession || officialSession) ? (
               <button
                 type="button"
                 onClick={() => {
@@ -168,7 +178,7 @@ export const Navbar: React.FC = () => {
                 className="w-full py-2 px-3 rounded-lg text-sm text-rose-600 hover:bg-rose-50 font-medium flex items-center gap-2"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Keluar Akun ({studentSession.fullName || studentSession.nisn})</span>
+                <span>Keluar Akun ({displayName})</span>
               </button>
             ) : (
               <Link

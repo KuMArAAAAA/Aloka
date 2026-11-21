@@ -27,9 +27,6 @@ export const Footer: React.FC = () => {
             <Link href="/sekolah" className="hover:text-white transition-colors">
               Verifikasi Sekolah
             </Link>
-            <Link href="/pemerintah" className="hover:text-white transition-colors">
-              Admin Perbendaharaan
-            </Link>
             <Link href="/transparansi" className="hover:text-white transition-colors">
               Buku Besar Audit
             </Link>

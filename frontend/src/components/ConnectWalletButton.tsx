@@ -103,14 +103,6 @@ export const ConnectWalletButton: React.FC = () => {
 
   // 4. Terhubung + jaringan benar → dropdown akun
   const getRoleBadge = () => {
-    if (isOwner) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-          <ShieldCheck className="w-3.5 h-3.5" />
-          KPA
-        </span>
-      );
-    }
     if (isValidator) {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
