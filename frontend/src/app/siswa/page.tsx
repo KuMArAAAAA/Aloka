@@ -5,6 +5,11 @@ import { useWeb3 } from "@/context/Web3Context";
 import { formatIDR, EscrowStatus, shortenAddress, mapOnchainStatus } from "@/lib/utils";
 import { INITIAL_STUDENTS, PIP_AID_CRITERIA, StudentRecord } from "@/lib/mockData";
 import { StatusBadge } from "@/components/StatusBadge";
+import {
+  getStudentToken,
+  getStudentSession,
+  hasActiveStudentSession,
+} from "@/lib/session";
 import { ethers } from "ethers";
 import {
   GraduationCap,
@@ -100,16 +105,9 @@ export default function SiswaPortalPage() {
 
   // Fetch profil + application siswa dari backend setelah login
   const loadStudentProfileFromBackend = async () => {
-    const token = localStorage.getItem("aloka_token");
-    const sessionRaw = localStorage.getItem("aloka_student_session");
-    if (!token || !sessionRaw) return;
-
-    let session: any;
-    try {
-      session = JSON.parse(sessionRaw);
-    } catch {
-      return;
-    }
+    const token = getStudentToken();
+    const session = getStudentSession<any>();
+    if (!token || !session) return;
 
     setLoadingProfile(true);
     setProfileError(null);
@@ -132,8 +130,15 @@ export default function SiswaPortalPage() {
         setFormName(record.name);
         setFormSchool(record.schoolName);
         setFormGrade(record.gradeLevel);
+        // Auto-expand form pengajuan jika user belum punya aplikasi atau ditolak
+        if (
+          record.status === EscrowStatus.BelumAda ||
+          record.status === EscrowStatus.Ditolak
+        ) {
+          setShowApplyForm(true);
+        }
       } else if (!res.ok && data?.error?.code === "APPLICATION_NOT_FOUND") {
-        // Siswa valid tapi belum punya application — tampilkan profil dasar
+        // Siswa valid tapi belum punya application — tampilkan profil dasar + auto-buka form
         const basicRecord: StudentRecord = {
           id: Math.floor(Math.random() * 1_000_000),
           nisn: session.nisn || "",
@@ -156,6 +161,7 @@ export default function SiswaPortalPage() {
         setFormName(basicRecord.name);
         setFormSchool(basicRecord.schoolName);
         setFormGrade(basicRecord.gradeLevel);
+        setShowApplyForm(true);
       } else if (!res.ok) {
         setProfileError(data?.message || "Gagal memuat profil dari server.");
       }
@@ -244,19 +250,17 @@ export default function SiswaPortalPage() {
 
   // Check login session + fetch profile dari backend
   React.useEffect(() => {
-    const raw = localStorage.getItem("aloka_student_session");
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        setActiveStudent(parsed);
-        if (parsed.nisn) {
-          setSearchNisn(parsed.nisn);
-          setFormNisn(parsed.nisn);
-          setFormName(parsed.fullName || "");
-        }
-      } catch {
-        // ignore
+    const parsed = getStudentSession<any>();
+    if (parsed && hasActiveStudentSession()) {
+      setActiveStudent(parsed);
+      if (parsed.nisn) {
+        setSearchNisn(parsed.nisn);
+        setFormNisn(parsed.nisn);
+        setFormName(parsed.fullName || "");
       }
+    } else if (parsed && !hasActiveStudentSession()) {
+      // Sisa session tanpa token aktif → bersihkan; SessionGuard akan redirect.
+      // Tidak perlu action eksplisit di sini.
     }
     // Fetch data live dari backend
     loadStudentProfileFromBackend();
@@ -306,9 +310,9 @@ export default function SiswaPortalPage() {
       const rawString = `${formNisn}-${formName}-${formSchool}-${formGrade}-${Date.now()}`;
       const hash = ethers.keccak256(ethers.toUtf8Bytes(rawString));
 
-      if (escrowContract) {
+      if (escrowContract && (escrowContract as any).runner) {
         try {
-          const tx = await escrowContract.submitApplication(hash);
+          const tx = await (escrowContract as any).submitApplication(hash);
           const receipt = await tx.wait();
           txHash = receipt.hash;
         } catch (onchainErr: any) {
@@ -316,6 +320,8 @@ export default function SiswaPortalPage() {
         }
       }
 
+      // Submit ke backend agar pengajuan tercatat di database
+      const backendSubmitted = await submitApplicationToBackend();
       const standardAmount = PIP_AID_CRITERIA.find((c) => c.code === formGrade)?.amount || 1800000;
 
       const newRecord: StudentRecord = {
@@ -332,10 +338,12 @@ export default function SiswaPortalPage() {
         submissionDate: new Date().toISOString().split("T")[0],
         applicationHash: hash,
         txHash: txHash,
-        verificationNotes: "Pengajuan berhasil dikirim on-chain. Menunggu verifikasi satuan pendidikan.",
+        verificationNotes: backendSubmitted
+          ? "Pengajuan berhasil dikirim on-chain dan tercatat di backend. Menunggu verifikasi satuan pendidikan."
+          : "Pengajuan tercatat on-chain (simulasi). Backend tidak terjangkau — data lokal sementara.",
       };
 
-      setStudents([newRecord, ...students]);
+      setStudents([newRecord, ...students.filter((s) => s.nisn !== newRecord.nisn)]);
       setSearchResult(newRecord);
       setTxSuccessHash(txHash);
       setHasSearched(true);
@@ -346,6 +354,38 @@ export default function SiswaPortalPage() {
       setFormError(err?.message || "Gagal mengirim pengajuan.");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Helper: POST ke /applications untuk persist pengajuan ke backend
+  const submitApplicationToBackend = async (): Promise<boolean> => {
+    const token = getStudentToken();
+    const session = getStudentSession<any>();
+    if (!token || !session) return false;
+    const studentId = session.id;
+    if (!studentId) return false;
+
+    try {
+      const res = await fetch(`${API_URL}/applications`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          studentId,
+          academicYear: "2025/2026",
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        return true;
+      }
+      console.warn("Backend /applications rejected:", data?.message || data);
+      return false;
+    } catch (err: any) {
+      console.warn("Cannot reach backend /applications:", err?.message);
+      return false;
     }
   };
 
@@ -599,6 +639,60 @@ export default function SiswaPortalPage() {
                     </div>
                   )}
 
+                  {/* Action: Ajukan / Re-ajukan PIP jika status belum ada aplikasi atau ditolak */}
+                  {(searchResult.status === EscrowStatus.BelumAda ||
+                    searchResult.status === EscrowStatus.Ditolak) && (
+                    <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 space-y-3">
+                      <div>
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold">
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>
+                            {searchResult.status === EscrowStatus.Ditolak
+                              ? "Pengajuan Ditolak — Silakan Ajukan Ulang"
+                              : "Belum Ada Pengajuan On-Chain"}
+                          </span>
+                        </div>
+                        <h4 className="text-base font-bold text-slate-900 mt-2">
+                          {searchResult.status === EscrowStatus.Ditolak
+                            ? "Ajukan Ulang Bantuan PIP"
+                            : "Mulai Pengajuan Bantuan PIP"}
+                        </h4>
+                        <p className="text-sm text-slate-600 mt-1">
+                          {searchResult.status === EscrowStatus.Ditolak
+                            ? "Pengajuan sebelumnya ditolak. Anda dapat mengajukan ulang setelah memperbaiki data. Isi formulir di bawah dan kirim untuk diverifikasi sekolah."
+                            : "Data NISN Anda tercatat di Dapodik namun belum memiliki pengajuan PIP on-chain. Isi formulir di bawah untuk memulai proses verifikasi."}
+                        </p>
+                      </div>
+                      <div className="pt-2 border-t border-amber-200">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormNisn(searchResult.nisn);
+                            setFormName(searchResult.name);
+                            setFormSchool(searchResult.schoolName);
+                            setFormGrade(searchResult.gradeLevel);
+                            setShowApplyForm(true);
+                            // Scroll ke form
+                            setTimeout(() => {
+                              document
+                                .getElementById("form-pengajuan-pip")
+                                ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }, 100);
+                          }}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors shadow-xs"
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>
+                            {searchResult.status === EscrowStatus.Ditolak
+                              ? "Ajukan Ulang Sekarang"
+                              : "Buka Formulir Pengajuan PIP"}
+                          </span>
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Tx Hash Link */}
                   {searchResult.txHash && (
                     <div className="pt-2 flex items-center justify-between text-xs text-slate-500 font-mono">
@@ -625,7 +719,7 @@ export default function SiswaPortalPage() {
                       Data NISN &quot;{searchNisn}&quot; Belum Ditemukan
                     </h3>
                     <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                      NISN tersebut belum terdaftar dalam sistem perbendaharaan Aloka. Jika Anda siswa yang memenuhi kriteria PIP, Anda dapat mengajukan pendaftaran baru.
+                      NISN tersebut belum terdaftar dalam sistem Aloka. Jika Anda siswa yang memenuhi kriteria PIP, Anda dapat mengajukan pendaftaran baru.
                     </p>
                   </div>
                   <button
@@ -644,7 +738,7 @@ export default function SiswaPortalPage() {
           )}
 
           {/* Form Pengajuan Baru */}
-          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-4">
+          <div id="form-pengajuan-pip" className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-4 scroll-mt-20">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-semibold text-slate-900">
@@ -657,6 +751,7 @@ export default function SiswaPortalPage() {
               <button
                 type="button"
                 onClick={() => setShowApplyForm(!showApplyForm)}
+                aria-expanded={showApplyForm}
                 className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors underline"
               >
                 {showApplyForm ? "Tutup Formulir" : "Buka Formulir"}
