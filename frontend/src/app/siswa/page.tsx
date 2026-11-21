@@ -109,7 +109,7 @@ export default function SiswaPortalPage() {
       npsn: school.npsn || "",
       gradeLevel: student.gradeLevel || "SMA",
       classRank: "Siswa Aktif",
-      walletAddress: student.walletAddress || "",
+      walletAddress: account || "", // HANYA gunakan MetaMask aktif siswa (tidak dibuat otomatis)
       amount,
       status,
       submissionDate,
@@ -163,7 +163,7 @@ export default function SiswaPortalPage() {
           npsn: session.school?.npsn || "",
           gradeLevel: session.gradeLevel || "SMA",
           classRank: "Siswa Aktif",
-          walletAddress: session.walletAddress || "",
+          walletAddress: account || "",
           amount: 0,
           status: EscrowStatus.BelumAda,
           submissionDate: new Date().toISOString().split("T")[0],
@@ -194,7 +194,7 @@ export default function SiswaPortalPage() {
           npsn: session.school?.npsn || "",
           gradeLevel: session.gradeLevel || "SMA",
           classRank: "Siswa Aktif",
-          walletAddress: session.walletAddress || "",
+          walletAddress: account || "",
           amount: 0,
           status: EscrowStatus.BelumAda,
           submissionDate: new Date().toISOString().split("T")[0],
@@ -283,7 +283,7 @@ export default function SiswaPortalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sinkronkan dompet digital penerima secara dinamis saat Web3 Wallet terhubung di Navbar
+  // Sinkronkan dompet digital penerima secara dinamis saat Web3 Wallet terhubung via MetaMask
   React.useEffect(() => {
     if (account) {
       setStudents((prev) =>
@@ -293,8 +293,30 @@ export default function SiswaPortalPage() {
         }))
       );
       setSearchResult((prev) => (prev ? { ...prev, walletAddress: account } : null));
+
+      // Otomatis sinkronkan dompet MetaMask siswa ke backend
+      const token = getStudentToken();
+      if (token) {
+        fetch(`${API_URL}/students/wallet/connect`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ walletAddress: account }),
+        }).catch((err) => console.warn("Sync wallet to backend:", err));
+      }
+    } else {
+      // Tidak ada wallet otomatis — jika MetaMask tidak terhubung, kosongkan
+      setStudents((prev) =>
+        prev.map((s) => ({
+          ...s,
+          walletAddress: "",
+        }))
+      );
+      setSearchResult((prev) => (prev ? { ...prev, walletAddress: "" } : null));
     }
-  }, [account]);
+  }, [account, API_URL]);
 
   // Search logic: cari di state lokal (diisi dari backend), bukan INITIAL_STUDENTS empty
   const handleSearch = (e: React.FormEvent) => {
@@ -614,15 +636,38 @@ export default function SiswaPortalPage() {
                     </div>
 
                     <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Dompet Digital Penerima</p>
-                      <p className="text-sm font-mono font-medium text-slate-800 mt-2 break-all">
-                        {account || searchResult.walletAddress}
+                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                        Dompet Digital Penerima (MetaMask)
                       </p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {account
-                          ? "Tersinkronisasi dengan Web3 Wallet aktif"
-                          : "Terikat secara sah di Smart Contract"}
-                      </p>
+                      {account ? (
+                        <div className="mt-2 space-y-1">
+                          <p className="text-sm font-mono font-bold text-slate-900 break-all">
+                            {account}
+                          </p>
+                          <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Tersambung dengan MetaMask Aktif</span>
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="mt-2 space-y-1.5">
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 text-xs font-medium">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>Belum Ada Dompet Terhubung</span>
+                          </div>
+                          <p className="text-xs text-slate-500 leading-relaxed">
+                            Bantuan PIP membutuhkan dompet Web3 untuk pencairan. Silakan klik{" "}
+                            <button
+                              type="button"
+                              onClick={connectWallet}
+                              className="text-blue-600 font-semibold underline hover:text-blue-800"
+                            >
+                              Hubungkan MetaMask
+                            </button>
+                            .
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -684,8 +729,10 @@ export default function SiswaPortalPage() {
                         </div>
                         <p className="text-xs">
                           {searchResult.status === EscrowStatus.Tersalurkan
-                            ? "Dana mIDR ditransfer ke wallet siswa"
-                            : "Menunggu trigger transfer otomatis"}
+                            ? "Dana mIDR ditransfer ke dompet MetaMask siswa"
+                            : account
+                            ? "Dana siap disalurkan ke dompet MetaMask terhubung"
+                            : "Menunggu dompet MetaMask dihubungkan"}
                         </p>
                       </div>
                     </div>

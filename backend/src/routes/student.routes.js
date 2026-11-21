@@ -44,4 +44,34 @@ router.post(
   authController.bindWallet
 );
 
+// POST /api/v1/students/wallet/connect - Hubungkan wallet MetaMask aktif langsung ke akun siswa
+router.post(
+  "/wallet/connect",
+  authenticateToken,
+  requireRole("STUDENT"),
+  async (req, res, next) => {
+    try {
+      const { walletAddress } = req.body;
+      if (!walletAddress || !/^0x[a-fA-F0-9]{40}$/i.test(walletAddress)) {
+        return errorResponse(res, "Alamat wallet MetaMask tidak valid", 400);
+      }
+      const studentId = req.user.studentId || req.user.sub;
+      const updated = await prisma.student.update({
+        where: { id: studentId },
+        data: {
+          walletAddress,
+          walletBoundAt: new Date(),
+        },
+      });
+      return successResponse(
+        res,
+        { walletAddress: updated.walletAddress },
+        "Dompet MetaMask berhasil ditautkan ke akun siswa"
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 export default router;
