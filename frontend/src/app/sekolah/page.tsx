@@ -64,11 +64,11 @@ export default function SekolahDashboardPage() {
 
   // Konversi student dari backend ke StudentRecord frontend
   const mapSchoolStudentToRecord = (item: any, fallbackSchoolName: string): StudentRecord => {
-    const latestApp = item.latestApplication || {};
-    const onchainStatus = latestApp.onchainStatus || "UNSUBMITTED";
+    const latestApp = (item.applications && item.applications.length > 0 ? item.applications[0] : null) || item.latestApplication || {};
+    const onchainStatus = latestApp.onchainStatus || (latestApp.status === 4 ? "DISTRIBUTED" : latestApp.status === 2 ? "VERIFIED" : "UNSUBMITTED");
     const status = mapOnchainStatus(onchainStatus);
     const amount = Number(latestApp.amount || 1800000);
-    const txHash = latestApp.txDistributeHash || latestApp.txVerifyHash || latestApp.txSubmitHash;
+    const txHash = latestApp.txDistributeHash || latestApp.txVerifyHash || latestApp.txSubmitHash || latestApp.txHash;
 
     return {
       id: latestApp.onchainId || latestApp.id || item.id,
@@ -390,7 +390,9 @@ export default function SekolahDashboardPage() {
                 filteredStudents.map((student) => (
                   <tr key={student.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3 px-4 font-mono text-slate-600">
-                      <span className="font-semibold text-slate-900 block">#{student.id}</span>
+                      <span className="font-semibold text-slate-900 block">
+                        #{String(student.id).length > 8 ? String(student.id).slice(0, 8) + "..." : student.id}
+                      </span>
                       <span className="text-xs text-slate-400">{student.submissionDate}</span>
                     </td>
                     <td className="py-3 px-4">
@@ -461,9 +463,13 @@ export default function SekolahDashboardPage() {
                             </a>
                           )}
                         </div>
-                      ) : (
+                      ) : student.status === EscrowStatus.Ditolak ? (
                         <span className="text-rose-600 font-medium text-xs">
                           Ditolak Verifikator
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-medium text-xs">
+                          Belum Diajukan
                         </span>
                       )}
                     </td>
