@@ -109,13 +109,14 @@ export default function SiswaPortalPage() {
 
     return {
       id: app.onchainId || app.id || Math.floor(Math.random() * 1_000_000),
+      applicationDbId: app.id,
       nisn: student.nisn || "",
       name: student.fullName || "Peserta Didik",
       schoolName: school.name || "Sekolah Tidak Terdata",
       npsn: school.npsn || "",
       gradeLevel: student.gradeLevel || "SMA",
       classRank: "Siswa Aktif",
-      walletAddress: account || "", // HANYA gunakan MetaMask aktif siswa (tidak dibuat otomatis)
+      walletAddress: student.walletAddress || account || "", // Pertahankan wallet siswa dari database jika sudah terdaftar
       amount,
       status,
       submissionDate,
@@ -232,32 +233,56 @@ export default function SiswaPortalPage() {
       alert("Hubungkan dompet Web3 MetaMask Anda terlebih dahulu.");
       return;
     }
-    const currentWallet = targetStudent.walletAddress || account;
-    if (account.toLowerCase() !== currentWallet.toLowerCase()) {
-      targetStudent.walletAddress = account;
-    }
 
     try {
       setIsClaiming(true);
       setClaimSuccessMsg(null);
 
-      let txHash = "0x" + Math.random().toString(16).substring(2, 66);
+      const token = getStudentToken();
+      let txHash = "";
 
-      if (escrowContract && escrowContract.runner) {
-        try {
-          const tx = await escrowContract.distributeAid(targetStudent.id);
-          const receipt = await tx.wait();
-          txHash = receipt.hash;
-        } catch (contractErr: any) {
-          console.warn("Claim aid fallback:", contractErr?.message);
+      // 1. Eksekusi pencairan on-chain melalui relayer backend
+      if (targetStudent.applicationDbId && token) {
+        // Pastikan alamat wallet aktif di MetaMask terikat ke akun siswa di backend sebelum klaim
+        if (account && (!targetStudent.walletAddress || targetStudent.walletAddress.toLowerCase() !== account.toLowerCase())) {
+          try {
+            await fetch(`${API_URL}/students/wallet/connect`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ walletAddress: account }),
+            });
+          } catch (bindErr) {
+            console.warn("Auto-binding wallet notice:", bindErr);
+          }
         }
+
+        const res = await fetch(`${API_URL}/blockchain/applications/${targetStudent.applicationDbId}/distribute`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        const result = await res.json();
+        if (!res.ok || !result.success) {
+          throw new Error(result?.message || result?.error?.message || "Gagal mencairkan dana on-chain.");
+        }
+        txHash = result.data?.txHash || "";
+      } else if (escrowContract && (escrowContract as any).runner) {
+        // Fallback jika direct contract call
+        const tx = await (escrowContract as any).distributeAid(targetStudent.id);
+        const receipt = await tx.wait();
+        txHash = receipt.hash;
       }
 
       const updatedRecord: StudentRecord = {
         ...targetStudent,
         status: EscrowStatus.Tersalurkan,
-        txHash: txHash,
-        verificationNotes: "Dana berhasil dicairkan melalui Claim Verification Engine langsung ke dompet siswa.",
+        txHash: txHash || undefined,
+        verificationNotes: "Dana bantuan telah berhasil ditransfer langsung on-chain ke dompet MetaMask Anda.",
       };
 
       setStudents((prev) =>
@@ -265,11 +290,11 @@ export default function SiswaPortalPage() {
       );
       setSearchResult(updatedRecord);
       setClaimSuccessMsg(
-        `Klaim sukses! Dana bantuan sebesar ${formatIDR(targetStudent.amount)} telah ditransfer langsung ke dompet Anda.`
+        `Klaim sukses! Dana bantuan sebesar ${formatIDR(targetStudent.amount)} telah ditransfer langsung ke dompet MetaMask Anda on-chain Polygon Amoy.`
       );
-      refreshContractStats();
+      await refreshContractStats();
     } catch (err: any) {
-      console.error(err);
+      console.error("Claim error:", err);
       alert(err?.message || "Gagal melakukan klaim bantuan.");
     } finally {
       setIsClaiming(false);
@@ -299,15 +324,13 @@ export default function SiswaPortalPage() {
   React.useEffect(() => {
     if (!account) {
       setIsWalletBound(false);
-      setStudents((prev) =>
-        prev.map((s) => ({
-          ...s,
-          walletAddress: "",
-        }))
-      );
-      setSearchResult((prev) => (prev ? { ...prev, walletAddress: "" } : null));
+      // Jangan reset walletAddress siswa agar memo/alamat tersimpan tidak hilang saat disconnect
+    } else {
+      if (searchResult?.walletAddress && account.toLowerCase() === searchResult.walletAddress.toLowerCase()) {
+        setIsWalletBound(true);
+      }
     }
-  }, [account]);
+  }, [account, searchResult?.walletAddress]);
 
   // Handler: Tanda tangani pesan SIWE di MetaMask untuk mengikat dompet secara sah
   const handleSignAndBindWallet = async () => {
@@ -784,20 +807,28 @@ Issued At: ${nowIso}`;
                         Dompet Digital Penerima (MetaMask)
                       </p>
                       {!account ? (
-                        <div className="mt-2 space-y-1.5">
+                        <div className="mt-2 space-y-2">
+                          {searchResult?.walletAddress ? (
+                            <div>
+                              <p className="text-[11px] font-medium text-slate-500 mb-0.5">Alamat Dompet Terdaftar di Sistem:</p>
+                              <p className="text-sm font-mono font-medium text-slate-800 break-all bg-white p-2 rounded border border-slate-200">
+                                {searchResult.walletAddress}
+                              </p>
+                            </div>
+                          ) : null}
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 text-xs font-medium">
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            <span>Belum Ada Dompet Terhubung</span>
+                            <span>{searchResult?.walletAddress ? "MetaMask Belum Terhubung" : "Belum Ada Dompet Terhubung"}</span>
                           </div>
                           <p className="text-xs text-slate-500 leading-relaxed">
-                            Bantuan PIP membutuhkan dompet Web3 untuk pencairan. Silakan klik{" "}
+                            Hubungkan dompet Web3 MetaMask Anda di jaringan Polygon Amoy untuk pencairan dana. Klik{" "}
                             <button
                               type="button"
                               onClick={handleSignAndBindWallet}
                               disabled={isSigning}
                               className="text-blue-600 font-semibold underline hover:text-blue-800"
                             >
-                              {isSigning ? "Menunggu Pop Up MetaMask..." : "Hubungkan & Sign MetaMask"}
+                              {isSigning ? "Menunggu Pop Up MetaMask..." : "Hubungkan & Tautkan MetaMask"}
                             </button>
                             .
                           </p>

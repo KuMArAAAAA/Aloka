@@ -281,6 +281,7 @@ router.get("/applications", async (req, res, next) => {
 
     const formatted = applications.map((app) => ({
       id: app.onchainId ? Number(app.onchainId) : app.id,
+      nisn: app.student?.nisn || "",
       name: app.student?.fullName || "Peserta Didik",
       schoolName: app.student?.school?.name || "Sekolah Tidak Terdata",
       npsn: app.student?.school?.npsn || "",

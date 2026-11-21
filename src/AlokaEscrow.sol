@@ -24,7 +24,7 @@ contract AlokaEscrow is Ownable, ReentrancyGuard {
     mapping(address => bool) public isSchoolValidator;
 
     struct Application {
-        address student;
+        address beneficiary;
         bytes32 applicationHash;
         uint256 amount;
         Status status;
@@ -39,13 +39,11 @@ contract AlokaEscrow is Ownable, ReentrancyGuard {
     event ValidatorUpdated(address indexed validator, bool allowed);
     event Funded(address indexed funder, uint256 amount);
 
-    event ApplicationSubmitted(uint256 indexed applicationId, address indexed student, bytes32 applicationHash);
-
+    event ApplicationSubmitted(uint256 indexed applicationId, address indexed submitter, address indexed beneficiary, bytes32 applicationHash);
     event ApplicationVerified(uint256 indexed applicationId, address indexed validator);
-
     event ApplicationRejected(uint256 indexed applicationId, address indexed validator);
-
-    event AidDistributed(uint256 indexed applicationId, address indexed student, uint256 amount);
+    event AidDistributed(uint256 indexed applicationId, address indexed beneficiary, uint256 amount);
+    event BeneficiaryUpdated(uint256 indexed applicationId, address indexed newBeneficiary);
 
     error ZeroAddress();
     error ZeroAmount();
@@ -86,24 +84,44 @@ contract AlokaEscrow is Ownable, ReentrancyGuard {
         emit Funded(msg.sender, amount);
     }
 
-    function submitApplication(bytes32 applicationHash) external returns (uint256 applicationId) {
+    function submitApplication(bytes32 applicationHash, address beneficiary) public returns (uint256 applicationId) {
         if (applicationHash == bytes32(0)) {
             revert InvalidApplication();
+        }
+        if (beneficiary == address(0)) {
+            revert ZeroAddress();
         }
 
         applicationId = nextApplicationId++;
 
         applications[applicationId] = Application({
-            student: msg.sender, applicationHash: applicationHash, amount: 0, status: Status.MenungguVerifikasi
+            beneficiary: beneficiary,
+            applicationHash: applicationHash,
+            amount: 0,
+            status: Status.MenungguVerifikasi
         });
 
-        emit ApplicationSubmitted(applicationId, msg.sender, applicationHash);
+        emit ApplicationSubmitted(applicationId, msg.sender, beneficiary, applicationHash);
+    }
+
+    function submitApplication(bytes32 applicationHash) external returns (uint256 applicationId) {
+        return submitApplication(applicationHash, msg.sender);
+    }
+
+    function updateBeneficiary(uint256 applicationId, address newBeneficiary) external onlyOwner {
+        if (newBeneficiary == address(0)) revert ZeroAddress();
+        Application storage app = applications[applicationId];
+        if (app.beneficiary == address(0)) revert InvalidApplication();
+        if (app.status == Status.Tersalurkan) revert WrongStatus(app.status);
+
+        app.beneficiary = newBeneficiary;
+        emit BeneficiaryUpdated(applicationId, newBeneficiary);
     }
 
     function verifyApplication(uint256 applicationId, uint256 amount) external onlySchoolValidator {
         Application storage app = applications[applicationId];
 
-        if (app.student == address(0)) {
+        if (app.beneficiary == address(0)) {
             revert InvalidApplication();
         }
 
@@ -122,7 +140,7 @@ contract AlokaEscrow is Ownable, ReentrancyGuard {
     function rejectApplication(uint256 applicationId) external onlySchoolValidator {
         Application storage app = applications[applicationId];
 
-        if (app.student == address(0)) {
+        if (app.beneficiary == address(0)) {
             revert InvalidApplication();
         }
 
@@ -137,7 +155,7 @@ contract AlokaEscrow is Ownable, ReentrancyGuard {
     function distributeAid(uint256 applicationId) external onlyOwner nonReentrant {
         Application storage app = applications[applicationId];
 
-        if (app.student == address(0)) {
+        if (app.beneficiary == address(0)) {
             revert InvalidApplication();
         }
 
@@ -154,8 +172,8 @@ contract AlokaEscrow is Ownable, ReentrancyGuard {
         app.status = Status.Tersalurkan;
         totalDistributed += amount;
 
-        rewardToken.safeTransfer(app.student, amount);
+        rewardToken.safeTransfer(app.beneficiary, amount);
 
-        emit AidDistributed(applicationId, app.student, amount);
+        emit AidDistributed(applicationId, app.beneficiary, amount);
     }
 }

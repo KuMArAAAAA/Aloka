@@ -101,7 +101,10 @@ export const submitApplicationOnChain = async (applicationId) => {
 
   logger.info(`[Blockchain] Submitting application ${applicationId} on-chain...`);
 
-  const tx = await escrow.submitApplication(application.applicationHash);
+  const targetBeneficiary = application.student?.walletAddress;
+  const tx = targetBeneficiary
+    ? await escrow["submitApplication(bytes32,address)"](application.applicationHash, targetBeneficiary)
+    : await escrow["submitApplication(bytes32)"](application.applicationHash);
   const receipt = await tx.wait();
 
   // Parse event ApplicationSubmitted untuk mendapat onchainId
@@ -314,6 +317,18 @@ export const distributeAidOnChain = async (applicationId) => {
   }
 
   logger.info(`[Blockchain] Distributing aid for onchainId: ${application.onchainId} → ${application.student.walletAddress}...`);
+
+  // Sinkronisasi beneficiary on-chain jika berbeda dengan wallet aktif siswa di DB
+  try {
+    const onchainApp = await escrow.applications(application.onchainId);
+    if (onchainApp.beneficiary && onchainApp.beneficiary.toLowerCase() !== application.student.walletAddress.toLowerCase()) {
+      logger.info(`[Blockchain] Updating beneficiary on-chain from ${onchainApp.beneficiary} to ${application.student.walletAddress}...`);
+      const updateTx = await escrow.updateBeneficiary(application.onchainId, application.student.walletAddress);
+      await updateTx.wait();
+    }
+  } catch (syncErr) {
+    logger.warn(`[Blockchain] Could not sync beneficiary on-chain: ${syncErr.message}`);
+  }
 
   const tx = await escrow.distributeAid(application.onchainId);
   const receipt = await tx.wait();

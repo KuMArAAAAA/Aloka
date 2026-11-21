@@ -39,7 +39,7 @@ router.post(
 router.post(
   "/applications/:id/distribute",
   authenticateToken,
-  requireRole("GOVERNMENT"),
+  requireRole("GOVERNMENT", "STUDENT"),
   blockchainController.distributeAid
 );
 

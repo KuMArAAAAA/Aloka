@@ -23,9 +23,6 @@ function deriveDemoWallets() {
     "student_agus_smp",
     "student_dewi_smk",
     "student_eko_sd",
-    "student_rini_sma",
-    "student_andi_smp",
-    "student_maya_sd",
   ];
   roles.forEach((role, idx) => {
     const w = ethers.HDNodeWallet.fromMnemonic(mnemonic, `m/44'/60'/0'/0/${idx}`);
@@ -38,11 +35,20 @@ function formatIDR(n) {
 }
 
 async function main() {
-  console.log("🌱 Starting Aloka comprehensive database seeding...");
+  console.log("🌱 Starting Aloka 5-Student Database Seeding...");
 
   deriveDemoWallets();
   const defaultPasswordHash = await bcrypt.hash("Password123!", 10);
   const ACADEMIC_YEAR = "2025/2026";
+
+  // Bersihkan data lama
+  await prisma.auditLog.deleteMany();
+  try { await prisma.$executeRawUnsafe('DELETE FROM "claims"'); } catch (_) {}
+  await prisma.application.deleteMany();
+  await prisma.schoolRecommendation.deleteMany();
+  await prisma.student.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.school.deleteMany();
 
   // ============================
   // 1. GOVERNMENT (KPA DJPb)
@@ -57,7 +63,6 @@ async function main() {
     },
   });
   console.log(`✅ Government User: ${govUser.email}`);
-  console.log(`   KPA Wallet (demo): ${demoWallets.gov_kpa.address}`);
 
   // ============================
   // 2. SCHOOLS (5 satuan pendidikan)
@@ -93,9 +98,9 @@ async function main() {
     },
     {
       roleKey: "school_smkn3",
-      npsn: "20308090",
+      npsn: "20503456",
       name: "SMKN 3 Surabaya",
-      address: "Jl. Mayjen Sungkono No. 9, Surabaya",
+      address: "Jl. Pemuda No. 88, Surabaya",
       schoolUserEmail: "smkn3sby@sekolah.id",
     },
   ];
@@ -104,7 +109,7 @@ async function main() {
   for (const s of schoolsData) {
     const school = await prisma.school.upsert({
       where: { npsn: s.npsn },
-      update: { validatorWallet: demoWallets[s.roleKey].address.toLowerCase() },
+      update: {},
       create: {
         npsn: s.npsn,
         name: s.name,
@@ -124,11 +129,11 @@ async function main() {
         schoolId: school.id,
       },
     });
-    console.log(`✅ School: ${school.name} (NPSN ${school.npsn}, validator ${demoWallets[s.roleKey].address.slice(0, 10)}...)`);
+    console.log(`✅ School: ${school.name}`);
   }
 
   // ============================
-  // 3. STUDENTS (8 siswa, lintas jenjang)
+  // 3. STUDENTS (HANYA 5 SISWA, Budi BELUM KLAIM / VERIFIED)
   // ============================
   const studentsData = [
     {
@@ -149,17 +154,7 @@ async function main() {
       phone: "082345678901",
       grade: "SMA",
       schoolIdx: 0,
-      walletBound: false,
-    },
-    {
-      roleKey: "student_rini_sma",
-      nisn: "0055512345",
-      fullName: "Rini Wulandari",
-      dob: "2008-01-10",
-      phone: "083456789012",
-      grade: "SMA",
-      schoolIdx: 1,
-      walletBound: false,
+      walletBound: true,
     },
     {
       roleKey: "student_agus_smp",
@@ -172,31 +167,11 @@ async function main() {
       walletBound: false,
     },
     {
-      roleKey: "student_andi_smp",
-      nisn: "0033398765",
-      fullName: "Andi Pratama",
-      dob: "2009-07-25",
-      phone: "085678901234",
-      grade: "SMP",
-      schoolIdx: 2,
-      walletBound: false,
-    },
-    {
       roleKey: "student_eko_sd",
       nisn: "0011123456",
       fullName: "Eko Saputra",
       dob: "2014-11-30",
       phone: "086789012345",
-      grade: "SD",
-      schoolIdx: 3,
-      walletBound: false,
-    },
-    {
-      roleKey: "student_maya_sd",
-      nisn: "0011198765",
-      fullName: "Maya Putri",
-      dob: "2015-02-14",
-      phone: "087890123456",
       grade: "SD",
       schoolIdx: 3,
       walletBound: false,
@@ -215,9 +190,8 @@ async function main() {
 
   const students = [];
   for (const s of studentsData) {
-    // Prefer custom wallet (e.g. user-supplied) over derived demo wallet
     const walletAddr = s.walletBound
-      ? (s.customWallet || demoWallets[s.roleKey].address).toLowerCase()
+      ? demoWallets[s.roleKey].address.toLowerCase()
       : null;
 
     const student = await prisma.student.upsert({
@@ -229,10 +203,6 @@ async function main() {
         gradeLevel: s.grade,
         isActive: true,
         schoolId: schools[s.schoolIdx].id,
-        ...(walletAddr ? {
-          walletAddress: walletAddr,
-          walletBoundAt: new Date(),
-        } : {}),
       },
       create: {
         nisn: s.nisn,
@@ -242,18 +212,16 @@ async function main() {
         gradeLevel: s.grade,
         isActive: true,
         schoolId: schools[s.schoolIdx].id,
-        ...(walletAddr ? {
-          walletAddress: walletAddr,
-          walletBoundAt: new Date(),
-        } : {}),
+        walletAddress: walletAddr,
+        walletBoundAt: walletAddr ? new Date() : null,
       },
     });
-    students.push({ ...student, roleKey: s.roleKey, walletBound: s.walletBound, schoolIdx: s.schoolIdx });
-    console.log(`✅ Student: ${student.fullName} (NISN ${student.nisn}, ${student.gradeLevel})${walletAddr ? ` - wallet: ${walletAddr.slice(0, 10)}...` : " - no wallet"}`);
+    students.push({ ...student, roleKey: s.roleKey, schoolIdx: s.schoolIdx });
+    console.log(`✅ Student: ${student.fullName} (NISN ${student.nisn})`);
   }
 
   // ============================
-  // 4. SCHOOL RECOMMENDATIONS (1 per student)
+  // 4. RECOMMENDATIONS
   // ============================
   const PIP_AMOUNTS = {
     SD: 450_000,
@@ -277,22 +245,17 @@ async function main() {
       },
     });
   }
-  console.log(`✅ Recommendations created for all ${students.length} students`);
 
   // ============================
-  // 5. APPLICATIONS (lintas status pipeline)
+  // 5. APPLICATIONS (5 SISWA)
+  // Budi (idx 0) -> VERIFIED (Siap Klaim di Demo!)
   // ============================
-  // Pipeline: UNSUBMITTED → AWAITING_REVIEW → VERIFIED → DISTRIBUTED (or REJECTED)
-  // Distribusi: 2 DISTRIBUTED, 2 VERIFIED, 2 AWAITING_REVIEW, 1 UNSUBMITTED, 1 REJECTED
   const applicationPipeline = [
-    { idx: 0, status: "DISTRIBUTED", amount: PIP_AMOUNTS.SMA },       // Budi (SMA) - completed
-    { idx: 3, status: "DISTRIBUTED", amount: PIP_AMOUNTS.SMP },       // Agus (SMP) - completed
-    { idx: 1, status: "VERIFIED",    amount: PIP_AMOUNTS.SMA },       // Siti (SMA) - ready to distribute
-    { idx: 6, status: "VERIFIED",    amount: PIP_AMOUNTS.SD },        // Eko (SD) - ready to distribute
-    { idx: 2, status: "AWAITING_REVIEW", amount: PIP_AMOUNTS.SMA },   // Rini (SMA) - submitted, awaiting school verify
-    { idx: 7, status: "AWAITING_REVIEW", amount: PIP_AMOUNTS.SMK },   // Dewi (SMK) - submitted
-    { idx: 4, status: "UNSUBMITTED", amount: PIP_AMOUNTS.SMP },       // Andi (SMP) - recommendation only
-    { idx: 5, status: "REJECTED",    amount: PIP_AMOUNTS.SD },        // Maya (SD) - rejected, fraud flag
+    { idx: 0, status: "VERIFIED", amount: PIP_AMOUNTS.SMA },       // Budi (SMA) - Siap Klaim!
+    { idx: 1, status: "DISTRIBUTED", amount: PIP_AMOUNTS.SMA },    // Siti (SMA) - Sudah Cair
+    { idx: 2, status: "AWAITING_REVIEW", amount: PIP_AMOUNTS.SMP },// Agus (SMP) - Menunggu Verifikasi
+    { idx: 3, status: "UNSUBMITTED", amount: PIP_AMOUNTS.SD },     // Eko (SD) - Belum Diajukan
+    { idx: 4, status: "REJECTED", amount: PIP_AMOUNTS.SMK },       // Dewi (SMK) - Ditolak
   ];
 
   const fakeTxHash = (prefix) =>
@@ -303,11 +266,9 @@ async function main() {
   const fakeAppHash = (nisn) =>
     ethers.keccak256(ethers.toUtf8Bytes(`${nisn}-${ACADEMIC_YEAR}-${Date.now()}`));
 
-  const applications = [];
   for (const item of applicationPipeline) {
     const student = students[item.idx];
     const appHash = fakeAppHash(student.nisn);
-    const schoolObj = schools[student.schoolIdx];
 
     let validationStatus = "VALID";
     if (item.status === "REJECTED") validationStatus = "REJECTED";
@@ -331,106 +292,19 @@ async function main() {
           : null,
         fraudFlag: item.status === "REJECTED",
         rejectionReason: item.status === "REJECTED"
-          ? "NISN duplikat terdeteksi pada tahun anggaran sebelumnya (Duplicate Beneficiary check gagal)"
+          ? "NISN tidak terdaftar di DTKS Kemensos"
           : null,
       },
     });
-    applications.push(app);
     console.log(`✅ Application #${app.id.slice(0, 8)}: ${student.fullName} → status ${item.status} (${formatIDR(item.amount)})`);
   }
 
-  // ============================
-  // 6. AUDIT LOGS (mock on-chain events)
-  // ============================
-  const auditActions = [
-    { app: applications[0], action: "ApplicationSubmitted", actor: "STUDENT", txField: "txSubmitHash" },
-    { app: applications[0], action: "ApplicationVerified",  actor: "SCHOOL",  txField: "txVerifyHash" },
-    { app: applications[0], action: "AidDistributed",       actor: "GOVERNMENT", txField: "txDistributeHash" },
-
-    { app: applications[1], action: "ApplicationSubmitted", actor: "STUDENT", txField: "txSubmitHash" },
-    { app: applications[1], action: "ApplicationVerified",  actor: "SCHOOL",  txField: "txVerifyHash" },
-    { app: applications[1], action: "AidDistributed",       actor: "GOVERNMENT", txField: "txDistributeHash" },
-
-    { app: applications[2], action: "ApplicationSubmitted", actor: "STUDENT", txField: "txSubmitHash" },
-    { app: applications[2], action: "ApplicationVerified",  actor: "SCHOOL",  txField: "txVerifyHash" },
-
-    { app: applications[3], action: "ApplicationSubmitted", actor: "STUDENT", txField: "txSubmitHash" },
-    { app: applications[3], action: "ApplicationVerified",  actor: "SCHOOL",  txField: "txVerifyHash" },
-
-    { app: applications[4], action: "ApplicationSubmitted", actor: "STUDENT", txField: "txSubmitHash" },
-    { app: applications[5], action: "ApplicationSubmitted", actor: "STUDENT", txField: "txSubmitHash" },
-
-    { app: applications[7], action: "ApplicationRejected",  actor: "SCHOOL",  txField: "txSubmitHash" },
-  ];
-
-  for (const log of auditActions) {
-    await prisma.auditLog.create({
-      data: {
-        entityType: "Application",
-        entityId: log.app.id,
-        action: log.action,
-        actorRole: log.actor,
-        txHash: log.app[log.txField],
-        metadata: {
-          studentId: log.app.studentId,
-          academicYear: log.app.academicYear,
-          amount: log.app.amount?.toString(),
-        },
-      },
-    });
-  }
-  console.log(`✅ Audit logs created: ${auditActions.length} on-chain event records`);
-
-  // ============================
-  // 7. EventSyncState (baseline block)
-  // ============================
-  await prisma.eventSyncState.upsert({
-    where: { consumerName: "eventListener" },
-    update: {},
-    create: {
-      consumerName: "eventListener",
-      lastProcessedBlock: BigInt(0),
-    },
-  });
-  console.log(`✅ EventSyncState baseline created`);
-
-  // ============================
-  // 8. Summary Print
-  // ============================
-  console.log("\n" + "=".repeat(60));
-  console.log("📊 SEEDING SUMMARY");
-  console.log("=".repeat(60));
-  console.log(`Government (KPA) Wallet : ${demoWallets.gov_kpa.address}`);
-  console.log(`School Validators        : ${schools.length} schools`);
-  console.log(`Students                 : ${students.length} siswa`);
-  console.log(`Applications             : ${applications.length} pipeline`);
-  console.log(`  - DISTRIBUTED          : ${applications.filter(a => a.onchainStatus === "DISTRIBUTED").length}`);
-  console.log(`  - VERIFIED             : ${applications.filter(a => a.onchainStatus === "VERIFIED").length}`);
-  console.log(`  - AWAITING_REVIEW      : ${applications.filter(a => a.onchainStatus === "AWAITING_REVIEW").length}`);
-  console.log(`  - UNSUBMITTED          : ${applications.filter(a => a.onchainStatus === "UNSUBMITTED").length}`);
-  console.log(`  - REJECTED             : ${applications.filter(a => a.onchainStatus === "REJECTED").length}`);
-  console.log("\n🔑 TEST LOGIN CREDENTIALS");
-  console.log("=".repeat(60));
-  console.log("[Siswa via Dapodik]");
-  studentsData.forEach(s => {
-    console.log(`  NISN: ${s.nisn} | DOB: ${s.dob} | ${s.fullName} (${s.gradeLevel})`);
-  });
-  console.log("\n[Admin/School via Email]");
-  console.log("  admin@kemendikbud.go.id / Password123!  (GOVERNMENT)");
-  schoolsData.forEach(s => {
-    console.log(`  ${s.schoolUserEmail} / Password123!  (SCHOOL: ${s.name})`);
-  });
-  console.log("\n[Web3 Wallet Addresses for MetaMask Import]");
-  Object.entries(demoWallets).forEach(([k, v]) => {
-    console.log(`  ${k.padEnd(20)} : ${v.address}`);
-  });
-  console.log("=".repeat(60));
-  console.log("🎉 Comprehensive seeding completed!");
+  console.log("🎉 Seeding 5 Siswa Selesai! Budi Pratama berstatus VERIFIED (Siap Klaim).");
 }
 
 main()
   .catch((e) => {
-    console.error("❌ Seeding failed:", e);
+    console.error(e);
     process.exit(1);
   })
   .finally(async () => {
