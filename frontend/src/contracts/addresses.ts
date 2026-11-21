@@ -8,7 +8,11 @@ export const NETWORK_CONFIG = {
     decimals: 18,
   },
   rpcUrls: [
-    process.env.NEXT_PUBLIC_RPC_URL || "https://rpc-amoy.polygon.technology",
+    // polygon-amoy-bor-rpc.publicnode.com is the most reliable public RPC.
+    // Older rpc-amoy.polygon.technology has been deprecated and no longer
+    // resolves in DNS — using it as default caused balanceOf() to silently
+    // fail to BigInt(0) for users. drpc.org free plan works in bursts only.
+    process.env.NEXT_PUBLIC_RPC_URL || "https://polygon-amoy-bor-rpc.publicnode.com",
     "https://polygon-amoy.drpc.org",
   ],
   blockExplorerUrls: ["https://amoy.polygonscan.com"],
