@@ -11,6 +11,8 @@ import {
   hasActiveStudentSession,
 } from "@/lib/session";
 import { ethers } from "ethers";
+import { CONTRACT_ADDRESSES, NETWORK_CONFIG } from "@/contracts/addresses";
+import { MOCK_IDR_ABI } from "@/contracts/abis";
 import {
   GraduationCap,
   Search,
@@ -44,13 +46,17 @@ export default function SiswaPortalPage() {
     walletAvailable,
     isLoading: walletLoading,
     escrowContract,
-    userMidrBalance,
     refreshContractStats,
   } = useWeb3();
 
   const [isSigning, setIsSigning] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
   const [isWalletBound, setIsWalletBound] = useState(false);
+
+  // Saldo mIDR di-read langsung dari RPC public (publicnode) — independent dari
+  // BrowserProvider MetaMask (yang internal RPC-nya juga bisa deprecated/cached).
+  // Pakai wallet address siswa yang sedang login. Refresh tiap 15 detik.
+  const [cardMidrBalance, setCardMidrBalance] = useState<bigint>(BigInt(0));
 
   const [copiedWallet, setCopiedWallet] = useState(false);
   const handleCopyWallet = (addr: string) => {
@@ -331,6 +337,39 @@ export default function SiswaPortalPage() {
       }
     }
   }, [account, searchResult?.walletAddress]);
+
+  // Fetch saldo mIDR langsung dari RPC publicnode — package ini bug saldo Rp 0
+  // yang terjadi kalau BrowserProvider MetaMask pakai RPC deprecated/blocked.
+  // Local JsonRpcProvider + read-only balanceOf akun siswa berjalan setiap 15s.
+  React.useEffect(() => {
+    if (!account) {
+      setCardMidrBalance(BigInt(0));
+      return;
+    }
+    let cancelled = false;
+    const rpcUrl = NETWORK_CONFIG.rpcUrls[0];
+    const readProvider = new ethers.JsonRpcProvider(rpcUrl);
+    const token = new ethers.Contract(
+      CONTRACT_ADDRESSES.mockIdr,
+      MOCK_IDR_ABI,
+      readProvider
+    );
+    const fetchBalance = async () => {
+      try {
+        const bal = await token.balanceOf(account);
+        if (!cancelled) setCardMidrBalance(bal);
+      } catch (err: any) {
+        // Diam — retry pada interval berikutnya. Jangan blank saldo yang sudah valid.
+        console.warn("[SiswaPortal] balanceOf failed:", err?.message);
+      }
+    };
+    fetchBalance();
+    const h = setInterval(fetchBalance, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(h);
+    };
+  }, [account]);
 
   // Handler: Tanda tangani pesan SIWE di MetaMask untuk mengikat dompet secara sah
   const handleSignAndBindWallet = async () => {
@@ -651,7 +690,7 @@ Issued At: ${nowIso}`;
                     </button>
                   </div>
                   <div className="bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-md font-semibold font-mono border border-emerald-200">
-                    Saldo mIDR: {formatIDR(userMidrBalance)}
+                    Saldo mIDR: {formatIDR(cardMidrBalance)}
                   </div>
                 </div>
               )}
