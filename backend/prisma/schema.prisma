@@ -1,0 +1,160 @@
+// backend/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  GOVERNMENT
+  SCHOOL
+  STUDENT
+}
+
+enum ValidationStatus {
+  PENDING
+  VALID
+  REJECTED
+}
+
+enum OnchainStatus {
+  UNSUBMITTED
+  AWAITING_REVIEW
+  VERIFIED
+  DISTRIBUTED
+  REJECTED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role
+  schoolId     String?  @map("school_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  school School? @relation(fields: [schoolId], references: [id])
+
+  @@map("users")
+}
+
+model School {
+  id              String   @id @default(uuid())
+  npsn            String   @unique
+  name            String
+  address         String?
+  validatorWallet String?  @unique @map("validator_wallet")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  users           User[]
+  students        Student[]
+  recommendations SchoolRecommendation[]
+
+  @@map("schools")
+}
+
+model Student {
+  id            String    @id @default(uuid())
+  nisn          String    @unique
+  fullName      String    @map("full_name")
+  dateOfBirth   DateTime  @map("date_of_birth")
+  phoneOrEmail  String?   @map("phone_or_email")
+  gradeLevel    String    @map("grade_level") // SD | SMP | SMA | SMK
+  isActive      Boolean   @default(true) @map("is_active")
+  walletAddress String?   @unique @map("wallet_address")
+  walletBoundAt DateTime? @map("wallet_bound_at")
+  schoolId      String    @map("school_id")
+
+  school          School                @relation(fields: [schoolId], references: [id])
+  applications    Application[]
+  recommendation  SchoolRecommendation?
+
+  @@map("students")
+}
+
+model SchoolRecommendation {
+  id              String    @id @default(uuid())
+  studentId       String    @unique @map("student_id")
+  schoolId        String    @map("school_id")
+  referenceNumber String    @map("reference_number")
+  isApproved      Boolean   @default(false) @map("is_approved")
+  submittedAt     DateTime  @default(now()) @map("submitted_at")
+  approvedAt      DateTime? @map("approved_at")
+
+  student Student @relation(fields: [studentId], references: [id])
+  school  School  @relation(fields: [schoolId], references: [id])
+
+  @@map("school_recommendations")
+}
+
+model Application {
+  id               String           @id @default(uuid())
+  onchainId        BigInt?          @unique @map("onchain_id")
+  applicationHash  String           @unique @map("application_hash")
+  studentId        String           @map("student_id")
+  academicYear     String           @map("academic_year")
+  amount           BigInt?
+  validationStatus ValidationStatus @default(PENDING) @map("validation_status")
+  onchainStatus    OnchainStatus    @default(UNSUBMITTED) @map("onchain_status")
+  txSubmitHash     String?          @map("tx_submit_hash")
+  txVerifyHash     String?          @map("tx_verify_hash")
+  txDistributeHash String?          @map("tx_distribute_hash")
+  fraudFlag        Boolean          @default(false) @map("fraud_flag")
+  rejectionReason  String?          @map("rejection_reason")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  student Student @relation(fields: [studentId], references: [id])
+
+  @@map("applications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  action     String
+  actorRole  String   @map("actor_role")
+  actorId    String?  @map("actor_id")
+  metadata   Json?
+  txHash     String?  @map("tx_hash")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}
+
+model SiweNonce {
+  nonce     String    @id
+  usedBy    String?   @map("used_by")
+  consumedAt DateTime? @map("consumed_at")
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@map("siwe_nonces")
+}
+
+model EventSyncState {
+  consumerName       String   @id @map("consumer_name")
+  lastProcessedBlock BigInt   @default(0) @map("last_processed_block")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("event_sync_states")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique @map("token_hash")
+  userId    String    @map("user_id")
+  revokedAt DateTime? @map("revoked_at")
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
