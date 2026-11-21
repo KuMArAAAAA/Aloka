@@ -346,15 +346,26 @@ export const distributeAidOnChain = async (applicationId) => {
       }
     }
 
-    const event = parseEventFromReceipt(subReceipt, escrow, "ApplicationSubmitted");
-    if (!event || !event.args || event.args.applicationId === undefined) {
+    // Extract onchainId directly from receipt logs (topics[1] is indexed applicationId
+    // in BOTH deployed bytecode (ApplicationSubmitted(uint256,address,bytes32), topic0
+    // 0x3cb64c06...) AND latest source (ApplicationSubmitted(uint256,address,address,bytes32),
+    // topic0 0x132923a7...). parseEventFromReceipt fails because the ABI tracks the latest
+    // source signature, not the deployed contract — so parse it manually.
+    const APP_SUB_TOPICS = [
+      ethers.id("ApplicationSubmitted(uint256,address,bytes32)"), // deployed bytecode (Polygon Amoy)
+      ethers.id("ApplicationSubmitted(uint256,address,address,bytes32)"), // current source
+    ];
+    const log = subReceipt.logs.find((l) =>
+      l.topics?.[0] && APP_SUB_TOPICS.includes(l.topics[0].toLowerCase())
+    );
+    if (!log || !log.topics[1]) {
       const error = new Error("ApplicationSubmitted event not emitted from submit tx");
       error.statusCode = 502;
       error.code = "ONCHAIN_EVENT_MISSING";
       throw error;
     }
-    application.onchainId = event.args.applicationId;
-    logger.info(`[Blockchain] Submitted. onchainId=${application.onchainId.toString()} | strategy=${submitStrategyUsed} | beneficiary=${beneficiaryOnChain}`);
+    application.onchainId = BigInt(log.topics[1]);
+    logger.info(`[Blockchain] Submitted. onchainId=${application.onchainId.toString()} | strategy=${submitStrategyUsed} | beneficiary=${beneficiaryOnChain} | topic0=${log.topics[0].slice(0, 18)}...`);
 
     // Auto-verify via school signer
     const schoolSigner = getSchoolSigner();
@@ -415,26 +426,26 @@ export const distributeAidOnChain = async (applicationId) => {
 
   logger.info(`[Blockchain] Distributing aid for onchainId: ${application.onchainId.toString()} → ${application.student.walletAddress}...`);
 
-  // Sync beneficiary on-chain jika berbeda dengan wallet aktif siswa di DB.
-  // Deployed contract saat ini TIDAK punya updateBeneficiary — call revert & di-catch.
-  // Akibatnya: beneficiary on-chain = gov signer (via 1-arg submit), dan di-post-distribute
-  // di-balance dengan off-chain ERC20 transfer gov -> student wallet (lihat bawah).
-  try {
-    const onchainApp = await escrow.applications(application.onchainId);
-    if (onchainApp.beneficiary && onchainApp.beneficiary.toLowerCase() !== application.student.walletAddress.toLowerCase()) {
-      logger.info(`[Blockchain] Attempting beneficiary sync: ${onchainApp.beneficiary} → ${application.student.walletAddress}...`);
-      const updateTx = await escrow.updateBeneficiary(application.onchainId, application.student.walletAddress);
-      await updateTx.wait();
-    }
-  } catch (syncErr) {
-    logger.warn(`[Blockchain] Beneficiary sync skipped (deployed contract lacks updateBeneficiary): ${syncErr.shortMessage || syncErr.message}. Will off-chain transfer to student wallet post-distribute.`);
-  }
+  // Catatan: deployed Polygon Amoy escrow TIDAK punya updateBeneficiary — calling
+  // it would leak a nonce from NonceManager (estimateGas reverts, internal counter
+  // still increments → next tx skips an on-chain nonce → stuck in mempool forever).
+  // Untuk kontrak yang sudah didistribusikan, beneficiary on-chain = gov signer
+  // (via 1-arg submitApplication variant), dan di-balance dengan off-chain ERC20
+  // transfer gov → student wallet POST-distribute (lihat bawah). Blok sink
+  // updateBeneficiary di-skip sepenuhnya untuk kontrak ini.
 
-  const feeData2 = await provider.getFeeData();
+  // Hardcoded gas price for Polygon Amoy (public RPC's getFeeData() sometimes
+  // returns null gasPrice which makes the gas-aware call silently hang).
+  // 80 gwei keeps tx competitive with typical Amoy conditions (~60 gwei).
+  const GAS_PRICE_FIXED = ethers.parseUnits("80", "gwei");
+
+  logger.info(`[Blockchain] Sending distributeAid onchainId=${application.onchainId.toString()} (gasPrice 80 gwei fixed)...`);
   const tx = await escrow.distributeAid(application.onchainId, {
-    gasLimit: 300_000, gasPrice: feeData2.gasPrice,
+    gasLimit: 300_000, gasPrice: GAS_PRICE_FIXED,
   });
+  logger.info(`[Blockchain] distributeAid tx broadcast: ${tx.hash} nonce=${tx.nonce}. Waiting for receipt...`);
   const receipt = await tx.wait();
+  logger.info(`[Blockchain] distributeAid receipt: block=${receipt.blockNumber} status=${receipt.status} gas=${receipt.gasUsed.toString()} logs=${receipt.logs.length}`);
   if (receipt.status !== 1) {
     const error = new Error(`distributeAid tx reverted (status ${receipt.status})`);
     error.statusCode = 502;
@@ -452,9 +463,11 @@ export const distributeAidOnChain = async (applicationId) => {
     logger.info(`[Blockchain] On-chain beneficiary is ${onchainAppAfter.beneficiary}. Off-chain transferring ${distAmount.toString()} mIDR → student wallet ${application.student.walletAddress}...`);
     const token = getTokenContractWithSigner(govSigner);
     const transferTx = await token.transfer(application.student.walletAddress, distAmount, {
-      gasLimit: 100_000, gasPrice: (await provider.getFeeData()).then(f => f.gasPrice),
+      gasLimit: 100_000, gasPrice: GAS_PRICE_FIXED,
     });
+    logger.info(`[Blockchain] Off-chain transfer tx broadcast: ${transferTx.hash}. Waiting for receipt...`);
     const transferReceipt = await transferTx.wait();
+    logger.info(`[Blockchain] Off-chain transfer receipt: status=${transferReceipt.status} gas=${transferReceipt.gasUsed.toString()}`);
     if (transferReceipt.status !== 1) {
       const error = new Error(`Off-chain transfer to student wallet reverted (status ${transferReceipt.status})`);
       error.statusCode = 502;

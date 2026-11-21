@@ -341,24 +341,24 @@ export default function SiswaPortalPage() {
       const token = getStudentToken();
       if (!token) throw new Error("Sesi login siswa belum aktif. Silakan masuk kembali dengan NISN.");
 
-      // 1. Hubungkan akun MetaMask jika belum terhubung
-      let activeAccount = account;
-      let activeSigner = signer;
+      // 1. Selalu re-request akun MetaMask tepat sebelum sign.
+      // Jangan andalkan `account` dari Web3Context — bisa address lama dari
+      // sesi sebelumnya yang tidak cocok dengan akun aktif MetaMask, sehingga
+      // personal_sign ditolak dengan code 4100 (unauthorized).
+      const eth = (window as any)?.ethereum;
+      if (!eth) {
+        throw new Error("Dompet Web3 MetaMask tidak terdeteksi. Silakan pasang ekstensi MetaMask.");
+      }
+      const browserProvider = new ethers.BrowserProvider(eth);
+      const accounts: string[] = await browserProvider.send("eth_requestAccounts", []);
+      if (!accounts || accounts.length === 0) {
+        throw new Error("Tidak ada akun MetaMask yang dipilih.");
+      }
+      const activeAccount = accounts[0];
+      const activeSigner = await browserProvider.getSigner();
 
-      if (!activeAccount || !activeSigner) {
-        const eth = (window as any)?.ethereum;
-        if (!eth) {
-          throw new Error("Dompet Web3 MetaMask tidak terdeteksi. Silakan pasang ekstensi MetaMask.");
-        }
-        const browserProvider = new ethers.BrowserProvider(eth);
-        const accounts: string[] = await browserProvider.send("eth_requestAccounts", []);
-        if (!accounts || accounts.length === 0) {
-          throw new Error("Tidak ada akun MetaMask yang dipilih.");
-        }
-        activeAccount = accounts[0];
-        activeSigner = await browserProvider.getSigner();
-
-        // Sync global Web3Context
+      // Sync global Web3Context bila akun yang terotorisasi berbeda
+      if (!account || account.toLowerCase() !== activeAccount.toLowerCase()) {
         await connectWallet();
       }
 
