@@ -30,11 +30,13 @@ import {
   Copy,
   Check,
   AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 
 export default function SiswaPortalPage() {
   const {
     account,
+    signer,
     connectWallet,
     disconnectWallet,
     switchNetwork,
@@ -45,6 +47,10 @@ export default function SiswaPortalPage() {
     userMidrBalance,
     refreshContractStats,
   } = useWeb3();
+
+  const [isSigning, setIsSigning] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
+  const [isWalletBound, setIsWalletBound] = useState(false);
 
   const [copiedWallet, setCopiedWallet] = useState(false);
   const handleCopyWallet = (addr: string) => {
@@ -138,6 +144,12 @@ export default function SiswaPortalPage() {
       const data = await res.json();
       if (res.ok && data.success && data.data) {
         const record = buildRecordFromBackend(data.data);
+        const boundWallet = data.data.student?.walletAddress || "";
+        if (boundWallet && account && boundWallet.toLowerCase() === account.toLowerCase()) {
+          setIsWalletBound(true);
+        } else {
+          setIsWalletBound(false);
+        }
         setStudents([record]);
         setSearchResult(record);
         setHasSearched(true);
@@ -283,31 +295,10 @@ export default function SiswaPortalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sinkronkan dompet digital penerima secara dinamis saat Web3 Wallet terhubung via MetaMask
+  // Pantau apakah akun MetaMask aktif cocok dengan status terikat siswa
   React.useEffect(() => {
-    if (account) {
-      setStudents((prev) =>
-        prev.map((s) => ({
-          ...s,
-          walletAddress: account,
-        }))
-      );
-      setSearchResult((prev) => (prev ? { ...prev, walletAddress: account } : null));
-
-      // Otomatis sinkronkan dompet MetaMask siswa ke backend
-      const token = getStudentToken();
-      if (token) {
-        fetch(`${API_URL}/students/wallet/connect`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ walletAddress: account }),
-        }).catch((err) => console.warn("Sync wallet to backend:", err));
-      }
-    } else {
-      // Tidak ada wallet otomatis — jika MetaMask tidak terhubung, kosongkan
+    if (!account) {
+      setIsWalletBound(false);
       setStudents((prev) =>
         prev.map((s) => ({
           ...s,
@@ -316,7 +307,110 @@ export default function SiswaPortalPage() {
       );
       setSearchResult((prev) => (prev ? { ...prev, walletAddress: "" } : null));
     }
-  }, [account, API_URL]);
+  }, [account]);
+
+  // Handler: Tanda tangani pesan SIWE di MetaMask untuk mengikat dompet secara sah
+  const handleSignAndBindWallet = async () => {
+    setIsSigning(true);
+    setSignError(null);
+
+    try {
+      const token = getStudentToken();
+      if (!token) throw new Error("Sesi login siswa belum aktif. Silakan masuk kembali dengan NISN.");
+
+      // 1. Hubungkan akun MetaMask jika belum terhubung
+      let activeAccount = account;
+      let activeSigner = signer;
+
+      if (!activeAccount || !activeSigner) {
+        const eth = (window as any)?.ethereum;
+        if (!eth) {
+          throw new Error("Dompet Web3 MetaMask tidak terdeteksi. Silakan pasang ekstensi MetaMask.");
+        }
+        const browserProvider = new ethers.BrowserProvider(eth);
+        const accounts: string[] = await browserProvider.send("eth_requestAccounts", []);
+        if (!accounts || accounts.length === 0) {
+          throw new Error("Tidak ada akun MetaMask yang dipilih.");
+        }
+        activeAccount = accounts[0];
+        activeSigner = await browserProvider.getSigner();
+
+        // Sync global Web3Context
+        await connectWallet();
+      }
+
+      if (!activeSigner || !activeAccount) {
+        throw new Error("Gagal memperoleh signer dari dompet MetaMask.");
+      }
+
+      // 2. Dapatkan Nonce resmi dari backend
+      const nonceRes = await fetch(`${API_URL}/auth/siwe/nonce`);
+      const nonceData = await nonceRes.json();
+      if (!nonceRes.ok || !nonceData?.data?.nonce) {
+        throw new Error(nonceData?.message || "Gagal mengambil nonce keamanan dari server.");
+      }
+      const nonce = nonceData.data.nonce;
+
+      // 3. Susun pesan SIWE (EIP-4361)
+      const domain = typeof window !== "undefined" ? window.location.host : "localhost:3001";
+      const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3001";
+      const nowIso = new Date().toISOString();
+      const currentNisn = activeStudent?.nisn || searchNisn || "Peserta Didik";
+
+      const siweMessage =
+`${domain} wants you to sign in with your Ethereum account:
+${activeAccount}
+
+Tanda tangani pesan ini untuk mengaitkan dompet Web3 MetaMask Anda dengan NISN ${currentNisn} di sistem Aloka PIP.
+
+URI: ${origin}
+Version: 1
+Chain ID: 80002
+Nonce: ${nonce}
+Issued At: ${nowIso}`;
+
+      // 4. Pemicu pop up Sign MetaMask!
+      const signature = await activeSigner.signMessage(siweMessage);
+
+      // 5. Kirim ke backend untuk verifikasi kriptografis
+      const bindRes = await fetch(`${API_URL}/students/wallet/bind`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          walletAddress: activeAccount,
+          message: siweMessage,
+          signature: signature,
+        }),
+      });
+
+      const bindData = await bindRes.json();
+      if (!bindRes.ok || !bindData.success) {
+        throw new Error(bindData.message || "Verifikasi tanda tangan gagal di server.");
+      }
+
+      // 6. Sukses terikat secara sah
+      setIsWalletBound(true);
+      setStudents((prev) =>
+        prev.map((s) => ({
+          ...s,
+          walletAddress: activeAccount!,
+        }))
+      );
+      setSearchResult((prev) => (prev ? { ...prev, walletAddress: activeAccount! } : null));
+    } catch (err: any) {
+      console.error("SIWE bind error:", err);
+      if (err?.code === 4001 || /rejected|denied|user rejected/i.test(err?.message)) {
+        setSignError("Permintaan tanda tangan di MetaMask dibatalkan oleh pengguna.");
+      } else {
+        setSignError(err?.message || "Gagal melakukan tanda tangan di MetaMask.");
+      }
+    } finally {
+      setIsSigning(false);
+    }
+  };
 
   // Search logic: cari di state lokal (diisi dari backend), bukan INITIAL_STUDENTS empty
   const handleSearch = (e: React.FormEvent) => {
@@ -479,13 +573,17 @@ export default function SiswaPortalPage() {
       <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-xs">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="flex items-start gap-4">
-            <div className={`p-3 rounded-xl shrink-0 ${account ? "bg-emerald-50 text-emerald-600" : "bg-blue-50 text-blue-600"}`}>
+            <div className={`p-3 rounded-xl shrink-0 ${account ? (isWalletBound ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600") : "bg-blue-50 text-blue-600"}`}>
               <Wallet className="w-6 h-6" />
             </div>
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-base font-bold text-slate-900">
-                  {account ? "Dompet Digital Siswa Terhubung" : "Koneksi Dompet Digital Siswa"}
+                  {account
+                    ? isWalletBound
+                      ? "Dompet Digital Siswa Terikat Resmi"
+                      : "Dompet Terhubung (Perlu Tanda Tangan)"
+                    : "Koneksi Dompet Digital Siswa"}
                 </h3>
                 {account && (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -496,9 +594,17 @@ export default function SiswaPortalPage() {
               </div>
               <p className="text-xs text-slate-500 max-w-xl leading-relaxed">
                 {account
-                  ? "Dompet digital ini digunakan untuk menerima transfer langsung alokasi PIP dari Smart Contract Escrow."
+                  ? isWalletBound
+                    ? "Dompet digital ini telah ditandatangani secara sah di MetaMask dan siap menerima transfer alokasi PIP dari Smart Contract Escrow."
+                    : "Dompet MetaMask terdeteksi. Silakan klik tombol 'Sign di MetaMask' agar MetaMask memunculkan pop up tanda tangan verifikasi kepemilikan dompet Anda."
                   : "Sambungkan dompet MetaMask di jaringan Polygon Amoy untuk menerima pencairan dana bantuan PIP langsung tanpa perantara."}
               </p>
+              {signError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2 mt-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{signError}</span>
+                </div>
+              )}
               {account && (
                 <div className="pt-2 flex flex-wrap items-center gap-3 text-xs font-mono">
                   <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md text-slate-700">
@@ -525,12 +631,21 @@ export default function SiswaPortalPage() {
               walletAvailable ? (
                 <button
                   type="button"
-                  onClick={connectWallet}
-                  disabled={walletLoading}
+                  onClick={handleSignAndBindWallet}
+                  disabled={walletLoading || isSigning}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors shadow-xs disabled:opacity-50"
                 >
-                  {walletLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wallet className="w-4 h-4" />}
-                  <span>{walletLoading ? "Menghubungkan..." : "Hubungkan Wallet"}</span>
+                  {isSigning || walletLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Menunggu Pop Up MetaMask...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Hubungkan & Sign MetaMask</span>
+                    </>
+                  )}
                 </button>
               ) : (
                 <a
@@ -552,14 +667,43 @@ export default function SiswaPortalPage() {
                 <AlertTriangle className="w-4 h-4" />
                 <span>Ganti ke Polygon Amoy</span>
               </button>
+            ) : !isWalletBound ? (
+              <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={handleSignAndBindWallet}
+                  disabled={isSigning}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm transition-all shadow-md active:scale-95 disabled:opacity-50"
+                >
+                  {isSigning ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="w-4 h-4" />
+                  )}
+                  <span>{isSigning ? "Menunggu Pop Up MetaMask..." : "Sign di MetaMask"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={disconnectWallet}
+                  className="w-full sm:w-auto px-3 py-2 text-xs text-slate-500 hover:text-slate-700 font-medium"
+                >
+                  Batal / Ganti
+                </button>
+              </div>
             ) : (
-              <button
-                type="button"
-                onClick={disconnectWallet}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-medium transition-colors"
-              >
-                <span>Putuskan Dompet</span>
-              </button>
+              <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
+                <div className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Dompet Terikat Sah</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={disconnectWallet}
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-medium transition-colors"
+                >
+                  <span>Putuskan Dompet</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -639,17 +783,7 @@ export default function SiswaPortalPage() {
                       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
                         Dompet Digital Penerima (MetaMask)
                       </p>
-                      {account ? (
-                        <div className="mt-2 space-y-1">
-                          <p className="text-sm font-mono font-bold text-slate-900 break-all">
-                            {account}
-                          </p>
-                          <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Tersambung dengan MetaMask Aktif</span>
-                          </p>
-                        </div>
-                      ) : (
+                      {!account ? (
                         <div className="mt-2 space-y-1.5">
                           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 text-xs font-medium">
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -659,12 +793,43 @@ export default function SiswaPortalPage() {
                             Bantuan PIP membutuhkan dompet Web3 untuk pencairan. Silakan klik{" "}
                             <button
                               type="button"
-                              onClick={connectWallet}
+                              onClick={handleSignAndBindWallet}
+                              disabled={isSigning}
                               className="text-blue-600 font-semibold underline hover:text-blue-800"
                             >
-                              Hubungkan MetaMask
+                              {isSigning ? "Menunggu Pop Up MetaMask..." : "Hubungkan & Sign MetaMask"}
                             </button>
                             .
+                          </p>
+                        </div>
+                      ) : !isWalletBound ? (
+                        <div className="mt-2 space-y-2">
+                          <p className="text-sm font-mono font-medium text-slate-800 break-all">
+                            {account}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded">
+                              Menunggu Tanda Tangan
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleSignAndBindWallet}
+                              disabled={isSigning}
+                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs flex items-center gap-1.5"
+                            >
+                              {isSigning ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3" />}
+                              <span>{isSigning ? "Menunggu Pop Up..." : "Sign di MetaMask"}</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-2 space-y-1">
+                          <p className="text-sm font-mono font-bold text-slate-900 break-all">
+                            {account}
+                          </p>
+                          <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Terikat Sah & Ditandatangani di Smart Contract</span>
                           </p>
                         </div>
                       )}
@@ -1001,7 +1166,7 @@ export default function SiswaPortalPage() {
                   <div className="text-xs text-slate-500">
                     Wallet pengirim ({account ? shortenAddress(account) : "Belum terhubung"}) menjadi dompet penerima dana.
                   </div>
-                  {account ? (
+                  {account && isWalletBound ? (
                     <button
                       type="submit"
                       disabled={submitting}
@@ -1013,11 +1178,12 @@ export default function SiswaPortalPage() {
                   ) : (
                     <button
                       type="button"
-                      onClick={connectWallet}
+                      onClick={handleSignAndBindWallet}
+                      disabled={isSigning}
                       className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm transition-colors flex items-center gap-2"
                     >
-                      <Wallet className="w-4 h-4" />
-                      <span>Hubungkan Wallet Dahulu</span>
+                      {isSigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                      <span>{isSigning ? "Menunggu Pop Up MetaMask..." : "Hubungkan & Tanda Tangani Dompet (Sign)"}</span>
                     </button>
                   )}
                 </div>

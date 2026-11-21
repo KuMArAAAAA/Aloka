@@ -403,7 +403,7 @@ export default function SekolahDashboardPage() {
                         NISN: {student.nisn} • {student.classRank}
                       </span>
                       <span className="text-xs text-slate-400 block font-mono">
-                        Wallet: {shortenAddress(student.walletAddress)}
+                        Wallet: {student.walletAddress ? shortenAddress(student.walletAddress) : <span className="text-amber-600 font-sans italic">Belum terikat MetaMask</span>}
                       </span>
                     </td>
                     <td className="py-3 px-4">
@@ -525,7 +525,7 @@ export default function SekolahDashboardPage() {
               <div className="flex justify-between">
                 <span className="text-slate-500">Dompet Penerima:</span>
                 <span className="font-mono text-slate-800 break-all">
-                  {shortenAddress(selectedStudent.walletAddress, 6)}
+                  {selectedStudent.walletAddress ? shortenAddress(selectedStudent.walletAddress, 6) : <span className="text-amber-600 font-sans italic">Belum terikat dompet Web3</span>}
                 </span>
               </div>
             </div>

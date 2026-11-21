@@ -139,8 +139,7 @@ async function main() {
       phone: "081234567890",
       grade: "SMA",
       schoolIdx: 0,
-      walletBound: true,
-      customWallet: "0x3944c3AC5CDadD8d9A478c37E64c1449f63D4035",
+      walletBound: false,
     },
     {
       roleKey: "student_siti_sma",
@@ -150,7 +149,7 @@ async function main() {
       phone: "082345678901",
       grade: "SMA",
       schoolIdx: 0,
-      walletBound: true,
+      walletBound: false,
     },
     {
       roleKey: "student_rini_sma",
@@ -160,7 +159,7 @@ async function main() {
       phone: "083456789012",
       grade: "SMA",
       schoolIdx: 1,
-      walletBound: true,
+      walletBound: false,
     },
     {
       roleKey: "student_agus_smp",
@@ -170,7 +169,7 @@ async function main() {
       phone: "084567890123",
       grade: "SMP",
       schoolIdx: 2,
-      walletBound: true,
+      walletBound: false,
     },
     {
       roleKey: "student_andi_smp",
@@ -190,7 +189,7 @@ async function main() {
       phone: "086789012345",
       grade: "SD",
       schoolIdx: 3,
-      walletBound: true,
+      walletBound: false,
     },
     {
       roleKey: "student_maya_sd",
@@ -210,7 +209,7 @@ async function main() {
       phone: "088901234567",
       grade: "SMK",
       schoolIdx: 4,
-      walletBound: true,
+      walletBound: false,
     },
   ];
 
