@@ -133,7 +133,7 @@ async function main() {
   }
 
   // ============================
-  // 3. STUDENTS (4 SISWA: 1 SMA + 3 SMP — Nabila sebagai siswa "terverifikasi NISN, belum mengajukan")
+  // 3. STUDENTS (5 SISWA: 1 SMA + 4 SMP — Nabila & Dewi sebagai profil "terverifikasi NISN, belum mengajukan")
   // ============================
   const studentsData = [
     {
@@ -174,6 +174,18 @@ async function main() {
       fullName: "Nabila Zahra",
       dob: "2012-07-25",
       phone: "087812345002",
+      grade: "SMP",
+      schoolIdx: 2,
+      walletBound: false,
+    },
+    // Siswa ke-5: profil kedua "verified NISN, belum mengajukan" di SMPN 5 Bandung.
+    // Dipake untuk demo alur submit pertama kali berdampingan dengan Nabila.
+    {
+      roleKey: "student_dewi_smp",
+      nisn: "0071234590",
+      fullName: "Dewi Lestari",
+      dob: "2012-11-08",
+      phone: "087812345003",
       grade: "SMP",
       schoolIdx: 2,
       walletBound: false,
@@ -292,7 +304,7 @@ async function main() {
     console.log(`✅ Application #${app.id.slice(0, 8)}: ${student.fullName} → status ${item.status} (${formatIDR(item.amount)})`);
   }
 
-  console.log("🎉 Seeding 4 Siswa Selesai! Budi (SMA) & Rizky (SMP) VERIFIED siap klaim. Agus (SMP) AWAITING_REVIEW. Nabila (SMP) NISN terverifikasi tanpa application — siap demo alur 'submit pertama kali'.");
+  console.log("🎉 Seeding 5 Siswa Selesai! Budi (SMA) & Rizky (SMP) VERIFIED siap klaim. Agus (SMP) AWAITING_REVIEW. Nabila & Dewi (SMP) NISN terverifikasi tanpa application — siap demo alur 'submit pertama kali'.");
 }
 
 main()
