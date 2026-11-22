@@ -1,7 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { ethers } from "ethers";
 import { useWeb3 } from "@/context/Web3Context";
+import { CONTRACT_ADDRESSES, NETWORK_CONFIG } from "@/contracts/addresses";
+import { MOCK_IDR_ABI } from "@/contracts/abis";
 import { shortenAddress, formatIDR } from "@/lib/utils";
 import {
   Wallet,
@@ -29,13 +32,46 @@ export const ConnectWalletButton: React.FC = () => {
     switchNetwork,
     isOwner,
     isValidator,
-    userMidrBalance,
     isLoading,
     walletAvailable,
   } = useWeb3();
 
   const [copied, setCopied] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  // Saldo mIDR di-read langsung dari publicnode RPC — konsisten dengan card
+  // saldo di halaman siswa. userMidrBalance dari Web3Context dipakai BrowserProvider
+  // MetaMask yang RPC internalnya bisa deprecated → BigInt(0) → di navbar muncul
+  // Rp 0 sementara card siswa Rs 3.6jt (tumpang tindih data).
+  const [buttonMidrBalance, setButtonMidrBalance] = useState<bigint>(BigInt(0));
+  useEffect(() => {
+    if (!account) {
+      setButtonMidrBalance(BigInt(0));
+      return;
+    }
+    let cancelled = false;
+    const rpcUrl = NETWORK_CONFIG.rpcUrls[0];
+    const readProvider = new ethers.JsonRpcProvider(rpcUrl);
+    const token = new ethers.Contract(
+      CONTRACT_ADDRESSES.mockIdr,
+      MOCK_IDR_ABI,
+      readProvider
+    );
+    const fetchBalance = async () => {
+      try {
+        const bal = await token.balanceOf(account);
+        if (!cancelled) setButtonMidrBalance(bal);
+      } catch (err: any) {
+        console.warn("[ConnectWalletButton] balanceOf failed:", err?.message);
+      }
+    };
+    fetchBalance();
+    const h = setInterval(fetchBalance, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(h);
+    };
+  }, [account]);
 
   const handleCopy = () => {
     if (!account) return;
@@ -137,7 +173,7 @@ export const ConnectWalletButton: React.FC = () => {
             {getRoleBadge()}
           </div>
           <span className="text-xs text-slate-500 mt-0.5">
-            Saldo: <strong className="text-slate-800 font-semibold">{formatIDR(userMidrBalance)}</strong>
+            Saldo: <strong className="text-slate-800 font-semibold">{formatIDR(buttonMidrBalance)}</strong>
           </span>
         </div>
         <ChevronDown className="w-4 h-4 text-slate-400 ml-1" />
